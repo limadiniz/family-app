@@ -17,7 +17,7 @@
 # from the repo root just works.
 # ============================================================================
 
-FROM node:20-alpine AS base
+FROM node:24-alpine AS base
 RUN apk add --no-cache libc6-compat
 WORKDIR /app
 # Pin the exact pnpm version declared in package.json's "packageManager" field
@@ -62,7 +62,7 @@ ENV SUPABASE_SERVICE_ROLE_KEY=placeholder-service-role-key
 RUN pnpm dlx turbo@^2.3.3 run build --filter=@family-app/api...
 
 # ---- Runtime: slim image, non-root user, only compiled output + deps -----
-FROM node:20-alpine AS runner
+FROM node:24-alpine AS runner
 RUN apk add --no-cache dumb-init
 WORKDIR /app
 ENV NODE_ENV=production
