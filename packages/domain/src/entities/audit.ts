@@ -48,6 +48,22 @@ export const auditEventTypeSchema = z.enum([
   'RESPONSIBILITY_DELEGATED',
   'RESPONSIBILITY_DELEGATION_DENIED',
   'CARE_NETWORK_MEMBER_ADDED',
+  // V3 additions (CareSchedule/CareWindow/Handoff application layer,
+  // Handoff Brief / Care Brief, Context Engine, §31-34, §57-66):
+  'CARE_SCHEDULE_CREATED',
+  'CARE_SCHEDULE_CANCELLED',
+  'CARE_WINDOW_CREATED',
+  'CARE_WINDOW_ACTIVATED',
+  'CARE_WINDOW_COMPLETED',
+  'CARE_WINDOW_CANCELLED',
+  'HANDOFF_CREATED',
+  'HANDOFF_CONFIRMED',
+  'HANDOFF_COMPLETED',
+  'HANDOFF_DELAYED',
+  'HANDOFF_CANCELLED',
+  'HANDOFF_DISPUTED',
+  'HANDOFF_BRIEF_VIEWED',
+  'CARE_BRIEF_VIEWED',
 ]);
 export type AuditEventType = z.infer<typeof auditEventTypeSchema>;
 

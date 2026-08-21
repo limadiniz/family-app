@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { detectConflicts, type ConflictCalendarEvent, type ConflictCareWindow, type ConflictHandoff, type ConflictResponsibilityAssignment } from '@family-app/domain';
 import type { RequestActor } from '../../common/auth.guard';
 import { AuditService } from '../../common/audit.service';
 import { PolicyService } from '../../common/policy.service';
@@ -223,8 +224,11 @@ export class CommandCenterService {
   /**
    * Family Command Center home aggregation (§24-26): everything relevant
    * to `subjectPersonId` for the given local calendar day, in one call —
-   * agenda, tasks due, and today's routine items. Each sub-query is
-   * still policy-checked (VIEW/SCHEDULE) before being included.
+   * agenda, tasks due, today's routine items, and Conflict Engine
+   * results (§43, packages/domain's `detectConflicts` — pure logic, this
+   * method only fetches the day's slice of each relevant table and hands
+   * it over). Each sub-query is still policy-checked (VIEW/SCHEDULE)
+   * before being included.
    */
   async getToday(actor: RequestActor, subjectPersonId: string, dayIso: string) {
     await this.policy.authorizeOrThrow(actor, 'VIEW', 'SCHEDULE', subjectPersonId, { purpose: 'today_aggregation' });
@@ -233,7 +237,7 @@ export class CommandCenterService {
     const dayEnd = `${dayIso}T23:59:59.999Z`;
     const db = this.db(actor);
 
-    const [eventsRes, tasksRes, routinesRes] = await Promise.all([
+    const [eventsRes, tasksRes, routinesRes, careWindowsRes, assignmentsRes, handoffsRes] = await Promise.all([
       db
         .from('calendar_events')
         .select('*')
@@ -248,17 +252,62 @@ export class CommandCenterService {
         .neq('status', 'DONE')
         .neq('status', 'CANCELLED'),
       db.from('routines').select('*, routine_items(*)').eq('subject_person_id', subjectPersonId).eq('active', true),
+      db.from('care_windows').select('*').eq('child_person_id', subjectPersonId).gte('ends_at', dayStart).lte('starts_at', dayEnd),
+      db.from('responsibility_assignments').select('*').eq('subject_person_id', subjectPersonId).gte('ends_at', dayStart).lte('starts_at', dayEnd),
+      db.from('handoffs').select('*').eq('child_person_id', subjectPersonId).gte('scheduled_at', dayStart).lte('scheduled_at', dayEnd),
     ]);
 
     if (eventsRes.error) throw new BadRequestException(eventsRes.error.message);
     if (tasksRes.error) throw new BadRequestException(tasksRes.error.message);
     if (routinesRes.error) throw new BadRequestException(routinesRes.error.message);
+    if (careWindowsRes.error) throw new BadRequestException(careWindowsRes.error.message);
+    if (assignmentsRes.error) throw new BadRequestException(assignmentsRes.error.message);
+    if (handoffsRes.error) throw new BadRequestException(handoffsRes.error.message);
+
+    const events: ConflictCalendarEvent[] = (eventsRes.data ?? []).map((e) => ({
+      id: e.id as string,
+      subjectPersonId: e.subject_person_id as string,
+      title: e.title as string,
+      category: e.category as string,
+      startsAt: e.starts_at as string,
+      endsAt: (e.ends_at as string | null) ?? null,
+      responsiblePersonId: (e.responsible_person_id as string | null) ?? null,
+      transportationPersonId: (e.transportation_person_id as string | null) ?? null,
+    }));
+    const careWindows: ConflictCareWindow[] = (careWindowsRes.data ?? []).map((w) => ({
+      id: w.id as string,
+      childPersonId: w.child_person_id as string,
+      caregiverPersonId: w.caregiver_person_id as string,
+      residenceId: (w.residence_id as string | null) ?? null,
+      startsAt: w.starts_at as string,
+      endsAt: w.ends_at as string,
+      status: w.status as ConflictCareWindow['status'],
+    }));
+    const responsibilityAssignments: ConflictResponsibilityAssignment[] = (assignmentsRes.data ?? []).map((r) => ({
+      id: r.id as string,
+      subjectPersonId: r.subject_person_id as string,
+      assignedToPersonId: r.assigned_to_person_id as string,
+      startsAt: r.starts_at as string,
+      endsAt: r.ends_at as string,
+      status: r.status as string,
+    }));
+    const handoffs: ConflictHandoff[] = (handoffsRes.data ?? []).map((h) => ({
+      id: h.id as string,
+      childPersonId: h.child_person_id as string,
+      fromPersonId: h.from_person_id as string,
+      toPersonId: h.to_person_id as string,
+      scheduledAt: h.scheduled_at as string,
+      status: h.status as string,
+    }));
+
+    const conflicts = detectConflicts({ events, careWindows, responsibilityAssignments, handoffs });
 
     return {
       date: dayIso,
       events: eventsRes.data ?? [],
       tasks: tasksRes.data ?? [],
       routines: routinesRes.data ?? [],
+      conflicts,
     };
   }
 

@@ -8,6 +8,7 @@ export * from './entities/residence';
 export * from './entities/role-permission';
 export * from './entities/authority-grant';
 export * from './entities/care';
+export * from './entities/conflict';
 export * from './entities/audit';
 export * from './entities/invitation';
 export * from './entities/product-stubs';
