@@ -48,14 +48,20 @@ docker run --rm -p 4000:4000 \
   family-app-api
 ```
 
-This image was written following the standard pnpm+Turborepo Docker recipe but **could not be build-tested
-in this session** — the cloud sandbox this assistant runs in has no network route to any container registry
-(Docker Hub, GHCR, GCR, MCR all refused the connection), so the base image itself can't be pulled here. It
-also can't be tested from your machine without installing Docker Desktop (the same gap already noted for
-`supabase db dump`, see `DATABASE_ENVIRONMENTS.md` §5). Real validation happens the first time `fly deploy`
-runs: **Fly.io builds the image on its own remote builder**, so you do not need Docker installed locally to
-deploy — only to test-build it yourself ahead of time if you want to. Treat the first `fly deploy` as the real
-first build test, and watch its output closely.
+This image was written following the standard pnpm+Turborepo Docker recipe. It could not be build-tested with
+an actual `docker build` in this session — the cloud sandbox this assistant runs in has no network route to
+any container registry (Docker Hub, GHCR, GCR, MCR all refused the connection), so the base image itself can't
+be pulled here, and it also can't be tested from your machine without installing Docker Desktop (the same gap
+already noted for `supabase db dump`, see `DATABASE_ENVIRONMENTS.md` §5). Instead, every stage's logic
+(`turbo prune` → `pnpm install` → `turbo run build`) was reproduced outside Docker, layer by layer, in a clean
+temp copy with no caches — that's how a real bug was caught and fixed before the first live deploy: `turbo
+prune --docker` copies each workspace package's files but not shared root-level config that isn't itself a
+workspace member, so every package's `tsc` build failed with `error TS5083: Cannot read file
+'/app/tsconfig.base.json'` until the Dockerfile explicitly copies that file into the builder stage (it now
+does). This gives real confidence in the build's *logic*; it's still not a byte-for-byte guarantee of the
+containerized environment, since Alpine's package set and BuildKit's layer caching can't be fully replicated
+outside Docker. Fly.io builds the actual image on its own remote builder on `fly deploy`, so you do not need
+Docker installed locally to deploy — only to test-build it yourself ahead of time if you want to.
 
 ## Hosting: apps/web → Vercel
 

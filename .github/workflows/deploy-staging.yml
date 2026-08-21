@@ -1,0 +1,83 @@
+﻿name: Deploy — Staging
+
+# Staging Supabase migrations + apps/api (Fly.io) on every push to `develop`.
+#
+# apps/web is deliberately NOT deployed from here: Vercel's own GitHub
+# integration (connect the repo in the Vercel dashboard, set Root Directory
+# = apps/web) auto-deploys on push to `develop` using apps/web/vercel.json —
+# that path also gives PR preview deploys for free, which scripting the
+# Vercel CLI here would not. See DEPLOYMENT.md "CD — staging".
+#
+# Required repo secrets (Settings → Secrets and variables → Actions), and a
+# `staging` GitHub Environment (Settings → Environments) if you want a
+# required-reviewers gate here too:
+#   SUPABASE_ACCESS_TOKEN        — personal/org access token (Supabase dashboard → Account → Access Tokens)
+#   SUPABASE_STAGING_PROJECT_REF — the staging project's ref (Project Settings → General)
+#   FLY_API_TOKEN_STAGING        — `fly tokens create deploy -a family-app-api-staging`
+# Full list and where each one is generated: DEPLOYMENT.md "Secrets by host".
+
+on:
+  push:
+    branches: [develop]
+  workflow_dispatch: {} # allow a manual re-run from the Actions tab without an empty commit
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false # never cancel a migration mid-flight
+
+jobs:
+  migrate:
+    name: Apply migrations (staging Supabase project)
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Link project + push migrations
+        # Authenticates via SUPABASE_ACCESS_TOKEN, the same access-token flow
+        # confirmed working manually against family-app-dev — no DB password
+        # needed for a --linked push.
+        run: |
+          supabase link --project-ref "${{ secrets.SUPABASE_STAGING_PROJECT_REF }}"
+          supabase db push
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+
+  deploy-api:
+    name: Deploy apps/api (Fly.io)
+    needs: migrate
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: fly deploy
+        run: flyctl deploy --config fly.staging.toml --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_STAGING }}
+
+  smoke-test:
+    name: Smoke test — GET /health
+    needs: deploy-api
+    runs-on: ubuntu-latest
+    steps:
+      - name: Poll apps/api health endpoint
+        run: |
+          url="https://family-app-api-staging.fly.dev/health"
+          for i in $(seq 1 10); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "$url" || echo "000")
+            if [ "$code" = "200" ]; then
+              echo "apps/api is healthy ($url)"
+              exit 0
+            fi
+            echo "attempt $i/10: got HTTP $code from $url, retrying in 6s..."
+            sleep 6
+          done
+          echo "::error::apps/api did not report healthy at $url after deploy"
+          exit 1

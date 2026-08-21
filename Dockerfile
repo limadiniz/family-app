@@ -44,6 +44,14 @@ RUN pnpm install --frozen-lockfile=false
 FROM base AS builder
 COPY --from=installer /app/ .
 COPY --from=pruner /app/out/full/ .
+# `turbo prune --docker` only copies files that belong to a workspace package
+# (apps/*, packages/*, package.json, pnpm-workspace.yaml, turbo.json, .npmrc) —
+# it does NOT copy shared root-level config that isn't itself a workspace
+# member. Every package's tsconfig.json does `"extends": "../../tsconfig.base.json"`,
+# so without this explicit copy every `tsc` build fails with
+# "error TS5083: Cannot read file '/app/tsconfig.base.json'" — confirmed by
+# reproducing the exact prune+install+build sequence outside Docker.
+COPY --from=pruner /app/tsconfig.base.json ./tsconfig.base.json
 # Placeholder values so packages/config's eager env validation (imported by
 # some workspace packages at module-load time during the TS build) doesn't
 # throw during `tsc` — real secrets are injected at *runtime* by Fly (see
