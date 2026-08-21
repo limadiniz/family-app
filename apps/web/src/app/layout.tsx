@@ -1,31 +1,25 @@
 import type { Metadata } from 'next';
-import { Plus_Jakarta_Sans } from 'next/font/google';
+import '@fontsource-variable/plus-jakarta-sans';
 import './globals.css';
 
 /**
- * Plus Jakarta Sans via next/font/google (§6.2) — self-hosted at build time
- * by Next.js (no runtime request to Google Fonts, no layout-shift flash),
- * with `display: 'swap'` so text never stays invisible while the font
- * loads and a system-font fallback stack in globals.css/tailwind covers
- * the (rare) case the font asset itself fails to load.
+ * Plus Jakarta Sans (§6.2) via @fontsource-variable — os arquivos .woff2
+ * são bundlados no pacote npm e servidos como asset estático do próprio
+ * build, sem nenhuma requisição de rede a fonts.googleapis.com/gstatic.com
+ * em build time nem em runtime.
  *
- * Verification note: this couldn't be build-tested end-to-end in the
- * cloud sandbox that authored this change — its network policy blocks
- * fonts.googleapis.com (same class of restriction already hit with
- * container registries and direct Postgres this project cycle). Removing
- * just this font import and rebuilding confirmed everything else (new
- * tokens, Tailwind config, every route) compiles and prerenders cleanly —
- * the Google Fonts fetch is the only untested step, and it runs on
- * Vercel's own build infra (unrestricted network, and next/font/google is
- * Vercel's own recommended integration), not this sandbox. Treat the
- * first real `apps/web` deploy after this change as that step's actual
- * test, same discipline as the Dockerfile fix earlier this project.
+ * Trocado de next/font/google para isto depois de reproduzir, neste mesmo
+ * sandbox, o build de `apps/web` falhando com NextFontError ao tentar
+ * buscar a fonte no Google Fonts — o sandbox bloqueia esse domínio
+ * especificamente (confirmado via curl: CONNECT tunnel 403), mas nada
+ * garante que builds locais dos devs, CI, ou redes corporativas com
+ * proxy restritivo não tenham a mesma classe de bloqueio; um build de
+ * produção não deveria depender de rede externa disponível no momento
+ * exato do build. Com next/font/local (que é o que este pacote usa por
+ * baixo) o build fica determinístico em qualquer ambiente, incluindo
+ * offline. `font-display: swap` já vem definido pelo próprio pacote.
  */
-const plusJakartaSans = Plus_Jakarta_Sans({
-  subsets: ['latin'],
-  variable: '--font-plus-jakarta-sans',
-  display: 'swap',
-});
+const FONT_FAMILY_VARIABLE = "'Plus Jakarta Sans Variable'";
 
 export const metadata: Metadata = {
   title: 'ZELII — O cuidado em sintonia',
@@ -34,7 +28,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="pt-BR" className={plusJakartaSans.variable}>
+    <html lang="pt-BR" style={{ ['--font-plus-jakarta-sans' as string]: FONT_FAMILY_VARIABLE }}>
       <body className="min-h-screen bg-bg font-sans text-ink antialiased">{children}</body>
     </html>
   );

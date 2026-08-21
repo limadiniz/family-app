@@ -16,6 +16,7 @@
     "@family-app/types": "workspace:*",
     "@family-app/ui": "workspace:*",
     "@family-app/validation": "workspace:*",
+    "@fontsource-variable/plus-jakarta-sans": "^5.3.0",
     "@supabase/supabase-js": "^2.45.4",
     "next": "14.2.15",
     "react": "18.2.0",
