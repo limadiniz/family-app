@@ -22,8 +22,9 @@ import './globals.css';
 const FONT_FAMILY_VARIABLE = "'Plus Jakarta Sans Variable'";
 
 export const metadata: Metadata = {
-  title: 'ZELII — O cuidado em sintonia',
-  description: 'ZELII organiza o cuidado entre todos que fazem parte da rotina da família: agenda, escola, saúde e cuidado, em um só lugar.',
+  title: 'ZELII — Todo o cuidado da família em sintonia',
+  description:
+    'A ZELII organiza compromissos, saúde, escola, documentos e responsabilidades para que toda a rede participe — sem esquecer de quem cuida.',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
