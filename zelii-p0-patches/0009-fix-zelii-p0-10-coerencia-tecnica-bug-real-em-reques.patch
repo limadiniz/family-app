@@ -1,0 +1,620 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 21 Aug 2026 03:29:02 +0000
+Subject: [PATCH 09/11] fix(zelii-p0): 10 - coerencia tecnica: bug real em
+ requests + seletor multi-familia
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Duas horas de investigacao antes de qualquer linha escrita, porque este
+e o item que toca autorizacao diretamente. Achados confirmados contra
+o schema real em supabase/migrations/ (nao especulacao):
+
+1) POST /requests estava quebrado para qualquer chamada real. A RLS
+   policy de insert em `requests` (migration 20260820000020) exige
+   `status = 'DRAFT'` - o fluxo real e sempre DRAFT->SENT por um UPDATE
+   separado, validado pelo trigger app.validate_request_transition() e
+   pelo mesmo canTransitionRequest() que o resto do service usa. Mas
+   requests.service.ts.create() inseria direto com `status: 'SENT'`,
+   pulando o DRAFT - toda chamada seria rejeitada pela RLS. Nenhum teste
+   cobria requests.service.ts (zero arquivos de teste pra ele existiam),
+   entao isso nunca foi pego. Corrigido pra inserir DRAFT, logar CREATED,
+   fazer o UPDATE DRAFT->SENT (mesma trilha de assertTransition que
+   accept/decline/cancel/dispute ja usam), logar SENT.
+
+2) applyAcceptanceEffect (efeito de aceitar um PICKUP_REQUEST/
+   DROPOFF_REQUEST/RESPONSIBILITY_TRANSFER) fazia um UPDATE em
+   calendar_events sem checar se alguma linha foi de fato afetada. A
+   policy calendar_events_access (migration 20260820000023) ja exige
+   app.has_domain_access(..., 'EDIT') no WITH CHECK - mas um UPDATE cujo
+   WHERE nao bate com nenhuma linha visivel pela RLS nao vira erro do
+   Postgres, vira 0 linhas silenciosamente. Sem checar isso, aceitar uma
+   solicitacao sem ter EDIT sobre aquele evento retornava sucesso e
+   gravava REQUEST_ACCEPTED no audit, mas o efeito real nunca acontecia.
+   Corrigido: o update agora faz .select('id').maybeSingle() e lanca
+   ForbiddenException se nada foi afetado - a negacao de RLS que ja
+   existia vira visivel em vez de engolida.
+
+Investigacao que NAO virou mudanca: reconstrui a arvore completa de
+`create policy .../ drop policy ...` das 27 migrations pra confirmar se
+sobrou alguma tabela ainda presa em app.current_tenant_id() (a funcao
+single-tenant, dropada em 20260820000025). Resultado: as 42 policies
+originais current_tenant_id() foram todas convertidas em algum arquivo
+posterior (0016-0027) - o comentario de 0025 ("verificado que nada mais
+chama current_tenant_id()") se confirma. So requests/request_actions e
+calendar_events tinham os dois bugs de aplicacao acima; o resto do
+schema multi-tenant esta coerente. Documentado aqui pra quem reabrir
+essa duvida nao precisar refazer a investigacao.
+
+--- Seletor multi-familia (a outra metade do §68) ---
+
+apps/api/src/common/auth.guard.ts ja calculava `actor.tenantMemberships`
+a partir de account_memberships e ja aceitava `x-tenant-id` pra escolher
+entre elas (validado contra as memberships da propria conta - nunca
+confia no header por si so) - suporte de verdade a uma Person em mais
+de uma FamilyUnit, regra dura do projeto. So que nada no frontend
+nunca usava isso: apiFetch nunca mandava o header, e nao existia
+nenhum endpoint que expusesse a lista com nomes legiveis. Resultado
+real: uma conta com 2+ familias caia sempre em "Conclua o cadastro
+inicial antes de continuar" (actor.tenantId ficava null porque o
+AuthGuard corretamente se recusa a adivinhar) - a funcionalidade
+existia no backend e era inacessivel.
+
+Novo, tudo leitura, sem service_role, sem mudanca de RLS:
+- apps/api/src/modules/accounts/ (novo modulo): GET /accounts/me/tenants
+  devolve currentTenantId + memberships (tenantId/personId/tenantName/
+  personDisplayName), lendo tenants+persons via forUser (respeita RLS
+  como qualquer outra leitura) para as tenantIds/personIds que o
+  AuthGuard ja resolveu.
+- apps/web/src/lib/tenant-context.ts: guarda so o tenantId escolhido
+  (localStorage) - nunca a lista de memberships. O backend segue
+  validando a cada request que esse id pertence mesmo a conta.
+- apps/web/src/lib/api-client.ts: apiFetch agora manda x-tenant-id
+  quando ha um valor guardado.
+- apps/web/src/components/family-gate.tsx (novo): envolve o layout de
+  /app - se currentTenantId vier null e houver 2+ memberships, bloqueia
+  com uma tela "Qual familia voce quer acessar?" em vez de deixar cair
+  no erro generico de cadastro incompleto. Descarta um tenantId guardado
+  que nao aparece mais na lista (membership revogada).
+- apps/web/src/components/app-nav.tsx: FamilySwitcher no rodape do menu
+  - so renderiza algo com 2+ memberships (o caso comum de 1 familia
+  nao muda em nada).
+
+Escopo: mobile nao ganhou o seletor nesta passada - a superficie do app
+RN hoje (6 telas, sem settings/requests/capture ainda) nao justifica
+introduzir AsyncStorage pra isso agora; fica registrado como proximo
+passo quando o mobile tiver mais telas que dependam de tenant.
+
+Verificado: typecheck, lint e os 35 testes existentes de @family-app/api
+passam (nenhum cobria requests.service.ts antes - fica para o proximo
+item, testes minimos obrigatorios). typecheck e lint de @family-app/web
+limpos. Nenhuma migration nova, nenhuma policy RLS alterada - os dois
+fixes de requests sao só correção de código de aplicação pra respeitar
+regras que o banco já impõe corretamente.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01NmTzhKuKEdztrGKZyeUHf4
+---
+ apps/api/src/app.module.ts                    |   2 +
+ .../modules/accounts/accounts.controller.ts   |  25 ++++
+ .../src/modules/accounts/accounts.module.ts   |   9 ++
+ .../src/modules/accounts/accounts.service.ts  |  46 ++++++++
+ .../src/modules/requests/requests.service.ts  |  34 +++++-
+ apps/web/src/app/app/layout.tsx               |  11 +-
+ apps/web/src/components/app-nav.tsx           |  68 +++++++++++
+ apps/web/src/components/family-gate.tsx       | 107 ++++++++++++++++++
+ apps/web/src/lib/api-client.ts                |   8 ++
+ apps/web/src/lib/tenant-context.ts            |  44 +++++++
+ 10 files changed, 345 insertions(+), 9 deletions(-)
+ create mode 100644 apps/api/src/modules/accounts/accounts.controller.ts
+ create mode 100644 apps/api/src/modules/accounts/accounts.module.ts
+ create mode 100644 apps/api/src/modules/accounts/accounts.service.ts
+ create mode 100644 apps/web/src/components/family-gate.tsx
+ create mode 100644 apps/web/src/lib/tenant-context.ts
+
+diff --git a/apps/api/src/app.module.ts b/apps/api/src/app.module.ts
+index 29b7142..c622e35 100644
+--- a/apps/api/src/app.module.ts
++++ b/apps/api/src/app.module.ts
+@@ -1,6 +1,7 @@
+ import { Module } from '@nestjs/common';
+ import { CommonModule } from './common/common.module';
+ import { HealthModule } from './modules/health/health.module';
++import { AccountsModule } from './modules/accounts/accounts.module';
+ import { OnboardingModule } from './modules/onboarding/onboarding.module';
+ import { FamilyModule } from './modules/family/family.module';
+ import { CommandCenterModule } from './modules/command-center/command-center.module';
+@@ -17,6 +18,7 @@ import { BriefingModule } from './modules/briefing/briefing.module';
+   imports: [
+     CommonModule,
+     HealthModule,
++    AccountsModule,
+     OnboardingModule,
+     FamilyModule,
+     CommandCenterModule,
+diff --git a/apps/api/src/modules/accounts/accounts.controller.ts b/apps/api/src/modules/accounts/accounts.controller.ts
+new file mode 100644
+index 0000000..bd8be83
+--- /dev/null
++++ b/apps/api/src/modules/accounts/accounts.controller.ts
+@@ -0,0 +1,25 @@
++import { Controller, Get, UseGuards } from '@nestjs/common';
++import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
++import { AuthGuard } from '../../common/auth.guard';
++import type { RequestActor } from '../../common/auth.guard';
++import { CurrentActor } from '../../common/current-actor.decorator';
++import { AccountsService } from './accounts.service';
++
++@ApiTags('accounts')
++@ApiBearerAuth()
++@UseGuards(AuthGuard)
++@Controller('accounts')
++export class AccountsController {
++  constructor(private readonly service: AccountsService) {}
++
++  /**
++   * `requireOnboarded: false` de propósito: uma conta com 2+ famílias
++   * chega aqui com `actor.tenantId === null` (AuthGuard não adivinha
++   * qual tenant usar sem um `x-tenant-id` — §10) e é exatamente esse
++   * caso que este endpoint existe para resolver, não um caso de erro.
++   */
++  @Get('me/tenants')
++  listMyTenants(@CurrentActor({ requireOnboarded: false }) actor: RequestActor) {
++    return this.service.listMyTenants(actor);
++  }
++}
+diff --git a/apps/api/src/modules/accounts/accounts.module.ts b/apps/api/src/modules/accounts/accounts.module.ts
+new file mode 100644
+index 0000000..0e18141
+--- /dev/null
++++ b/apps/api/src/modules/accounts/accounts.module.ts
+@@ -0,0 +1,9 @@
++import { Module } from '@nestjs/common';
++import { AccountsController } from './accounts.controller';
++import { AccountsService } from './accounts.service';
++
++@Module({
++  controllers: [AccountsController],
++  providers: [AccountsService],
++})
++export class AccountsModule {}
+diff --git a/apps/api/src/modules/accounts/accounts.service.ts b/apps/api/src/modules/accounts/accounts.service.ts
+new file mode 100644
+index 0000000..1cadbcd
+--- /dev/null
++++ b/apps/api/src/modules/accounts/accounts.service.ts
+@@ -0,0 +1,46 @@
++import { Injectable } from '@nestjs/common';
++import type { RequestActor } from '../../common/auth.guard';
++import { SupabaseService } from '../../common/supabase.service';
++
++/**
++ * Multi-família (§68/§10): AuthGuard já resolve `actor.tenantMemberships`
++ * a partir de `account_memberships` a cada request, e RLS em `tenants`/
++ * `persons` usa `app.is_current_tenant(...)` — não depende de nenhum
++ * `x-tenant-id` selecionado, então dá pra ler os nomes de TODAS as
++ * tenants/persons da conta numa query só, mesmo antes de escolher uma.
++ * Sem service_role: usa `forUser`, respeitando RLS como qualquer outra
++ * leitura (§10 — "não use service_role como atalho").
++ */
++@Injectable()
++export class AccountsService {
++  constructor(private readonly supabase: SupabaseService) {}
++
++  async listMyTenants(actor: RequestActor) {
++    if (actor.tenantMemberships.length === 0) {
++      return { currentTenantId: actor.tenantId, memberships: [] };
++    }
++    const client = this.supabase.forUser(actor.bearerToken);
++    const tenantIds = [...new Set(actor.tenantMemberships.map((m) => m.tenantId))];
++    const personIds = [...new Set(actor.tenantMemberships.map((m) => m.personId))];
++
++    const [{ data: tenants, error: tenantsError }, { data: persons, error: personsError }] = await Promise.all([
++      client.from('tenants').select('id, name').in('id', tenantIds),
++      client.from('persons').select('id, display_name').in('id', personIds),
++    ]);
++    if (tenantsError) throw tenantsError;
++    if (personsError) throw personsError;
++
++    const tenantName = new Map((tenants ?? []).map((t) => [t.id as string, t.name as string]));
++    const personName = new Map((persons ?? []).map((p) => [p.id as string, p.display_name as string]));
++
++    return {
++      currentTenantId: actor.tenantId,
++      memberships: actor.tenantMemberships.map((m) => ({
++        tenantId: m.tenantId,
++        personId: m.personId,
++        tenantName: tenantName.get(m.tenantId) ?? 'Família',
++        personDisplayName: personName.get(m.personId) ?? '',
++      })),
++    };
++  }
++}
+diff --git a/apps/api/src/modules/requests/requests.service.ts b/apps/api/src/modules/requests/requests.service.ts
+index 0b92011..5b3b688 100644
+--- a/apps/api/src/modules/requests/requests.service.ts
++++ b/apps/api/src/modules/requests/requests.service.ts
+@@ -60,12 +60,19 @@ export class RequestsService {
+       throw new BadRequestException('Não é possível criar uma solicitação para si mesmo.');
+     }
+     const db = this.db(actor);
+-    const { data, error } = await db
++
++    // A linha nasce DRAFT, nunca SENT direto: a policy de INSERT em
++    // requests (migration 20260820000020) exige `status = 'DRAFT'` — o
++    // caminho real de criação é sempre DRAFT->SENT por um UPDATE
++    // separado, validado pelo trigger app.validate_request_transition()
++    // e pelo mesmo canTransitionRequest que o resto deste service usa.
++    // Inserir já como 'SENT' viola essa policy e a criação inteira falha.
++    const { data: draft, error: insertError } = await db
+       .from('requests')
+       .insert({
+         tenant_id: actor.tenantId,
+         type: input.type,
+-        status: 'SENT',
++        status: 'DRAFT',
+         requested_by_person_id: actor.personId,
+         requested_to_person_id: input.requestedToPersonId,
+         subject_person_id: input.subjectPersonId ?? null,
+@@ -77,9 +84,14 @@ export class RequestsService {
+       })
+       .select()
+       .single();
++    if (insertError) throw new BadRequestException(insertError.message);
++
++    await this.logAction(actor, draft.id as string, 'CREATED');
++
++    this.assertTransition('DRAFT', 'SENT');
++    const { data, error } = await db.from('requests').update({ status: 'SENT' }).eq('id', draft.id as string).select().single();
+     if (error) throw new BadRequestException(error.message);
+ 
+-    await this.logAction(actor, data.id as string, 'CREATED');
+     await this.logAction(actor, data.id as string, 'SENT');
+ 
+     await this.audit.record(actor, {
+@@ -224,10 +236,22 @@ export class RequestsService {
+     if (relatedType !== 'calendar_events') return;
+ 
+     const column = type === 'RESPONSIBILITY_TRANSFER' ? 'responsible_person_id' : 'transportation_person_id';
+-    const { error } = await this.db(actor)
++    // calendar_events_access (migration 20260820000023) já exige
++    // app.has_domain_access(..., 'EDIT') no WITH CHECK — mas um UPDATE
++    // cujo WHERE não bate com nenhuma linha visível pela RLS não é um
++    // erro do Postgres, é 0 linhas afetadas em silêncio. Sem checar
++    // isso, quem aceita uma solicitação sem EDIT sobre o evento via um
++    // "sucesso" e um REQUEST_ACCEPTED auditado, mas o efeito real nunca
++    // aconteceu — pior que um 403 alto e claro (§10).
++    const { data, error } = await this.db(actor)
+       .from('calendar_events')
+       .update({ [column]: request.requested_to_person_id })
+-      .eq('id', relatedId);
++      .eq('id', relatedId)
++      .select('id')
++      .maybeSingle();
+     if (error) throw new BadRequestException(error.message);
++    if (!data) {
++      throw new ForbiddenException('Você não tem permissão para aplicar o efeito desta solicitação a este evento.');
++    }
+   }
+ }
+diff --git a/apps/web/src/app/app/layout.tsx b/apps/web/src/app/app/layout.tsx
+index a6376ee..7998f0a 100644
+--- a/apps/web/src/app/app/layout.tsx
++++ b/apps/web/src/app/app/layout.tsx
+@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
+ import { useRouter } from 'next/navigation';
+ import { getSupabaseBrowserClient } from '@/lib/supabase-client';
+ import { AppNav } from '@/components/app-nav';
++import { FamilyGate } from '@/components/family-gate';
+ 
+ /**
+  * Auth-gated shell for the whole /app area (§79). Client-rendered check
+@@ -33,9 +34,11 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
+   }
+ 
+   return (
+-    <div className="flex min-h-screen">
+-      <AppNav />
+-      <main className="flex-1 p-8">{children}</main>
+-    </div>
++    <FamilyGate>
++      <div className="flex min-h-screen">
++        <AppNav />
++        <main className="flex-1 p-8">{children}</main>
++      </div>
++    </FamilyGate>
+   );
+ }
+diff --git a/apps/web/src/components/app-nav.tsx b/apps/web/src/components/app-nav.tsx
+index 11867e1..acae31b 100644
+--- a/apps/web/src/components/app-nav.tsx
++++ b/apps/web/src/components/app-nav.tsx
+@@ -1,8 +1,11 @@
+ 'use client';
+ 
++import { useEffect, useState } from 'react';
+ import Link from 'next/link';
+ import { usePathname, useRouter } from 'next/navigation';
+ import { getSupabaseBrowserClient } from '@/lib/supabase-client';
++import { apiFetch } from '@/lib/api-client';
++import { setStoredTenantId } from '@/lib/tenant-context';
+ import { TodayIcon, FamilyIcon, AgendaIcon, HealthIcon, AssistantIcon, SettingsIcon } from '@/components/ui/nav-icons';
+ import type { ComponentType, SVGProps } from 'react';
+ 
+@@ -69,6 +72,70 @@ const areas: Array<{
+   },
+ ];
+ 
++interface TenantMembership {
++  tenantId: string;
++  personId: string;
++  tenantName: string;
++  personDisplayName: string;
++}
++
++/**
++ * Só aparece com 2+ famílias ativas (§10/§68) — pra maioria das contas,
++ * que tem exatamente uma, isto não renderiza nada. Trocar de família
++ * recarrega a página de propósito (mesmo raciocínio do FamilyGate: nunca
++ * misturar dados de duas famílias na mesma árvore de componentes já montada).
++ */
++function FamilySwitcher() {
++  const [memberships, setMemberships] = useState<TenantMembership[]>([]);
++  const [currentTenantId, setCurrentTenantId] = useState<string | null>(null);
++  const [open, setOpen] = useState(false);
++
++  useEffect(() => {
++    apiFetch<{ currentTenantId: string | null; memberships: TenantMembership[] }>('/accounts/me/tenants')
++      .then((res) => {
++        setMemberships(res.memberships);
++        setCurrentTenantId(res.currentTenantId);
++      })
++      .catch(() => undefined); // widget não crítico
++  }, []);
++
++  if (memberships.length <= 1) return null;
++  const current = memberships.find((m) => m.tenantId === currentTenantId);
++
++  return (
++    <div className="relative mb-4 px-2">
++      <button
++        type="button"
++        onClick={() => setOpen((v) => !v)}
++        aria-expanded={open}
++        className="flex min-h-touch w-full items-center justify-between rounded-md border border-border bg-surface px-2 text-left text-xs"
++      >
++        <span className="truncate text-ink">{current?.tenantName ?? 'Escolher família'}</span>
++        <span className="ml-2 shrink-0 text-primary">Trocar</span>
++      </button>
++      {open && (
++        <div className="absolute left-2 right-2 z-10 mt-1 rounded-md border border-border bg-surface p-1 shadow-lg">
++          {memberships.map((m) => (
++            <button
++              key={m.tenantId}
++              type="button"
++              onClick={() => {
++                setStoredTenantId(m.tenantId);
++                window.location.reload();
++              }}
++              className={`w-full rounded px-2 py-1.5 text-left text-xs hover:bg-surfaceMuted ${
++                m.tenantId === currentTenantId ? 'font-medium text-ink' : 'text-inkMuted'
++              }`}
++            >
++              {m.tenantName} <span className="text-inkMuted">— como {m.personDisplayName}</span>
++            </button>
++          ))}
++        </div>
++      )}
++    </div>
++  );
++}
++
+ export function AppNav() {
+   const pathname = usePathname();
+   const router = useRouter();
+@@ -81,6 +148,7 @@ export function AppNav() {
+   return (
+     <aside className="flex w-60 flex-col border-r border-border bg-surface p-4">
+       <span className="mb-6 px-2 text-lg font-semibold text-ink">ZELII</span>
++      <FamilySwitcher />
+       <nav className="flex flex-1 flex-col gap-4 overflow-y-auto">
+         {areas.map((area) => {
+           const Icon = area.icon;
+diff --git a/apps/web/src/components/family-gate.tsx b/apps/web/src/components/family-gate.tsx
+new file mode 100644
+index 0000000..1baad70
+--- /dev/null
++++ b/apps/web/src/components/family-gate.tsx
+@@ -0,0 +1,107 @@
++'use client';
++
++import { useEffect, useState } from 'react';
++import { apiFetch } from '@/lib/api-client';
++import { getStoredTenantId, setStoredTenantId, clearStoredTenantId } from '@/lib/tenant-context';
++import { Card, Button, LoadingState, ErrorState } from '@/components/ui';
++
++interface TenantMembership {
++  tenantId: string;
++  personId: string;
++  tenantName: string;
++  personDisplayName: string;
++}
++
++interface MyTenantsResponse {
++  currentTenantId: string | null;
++  memberships: TenantMembership[];
++}
++
++/**
++ * Seletor multi-família (§10/§68). Uma Account pode ter mais de uma
++ * membership ACTIVE (mesma Person em mais de uma FamilyUnit — regra
++ * dura do projeto). O backend (apps/api/.../auth.guard.ts) já recusa
++ * adivinhar qual delas usar quando há mais de uma e nenhum
++ * `x-tenant-id` foi enviado — ele deixa `tenantId`/`personId` null em
++ * vez de escolher errado. Este componente é a UI que resolve essa
++ * ambiguidade: bloqueia as telas internas até a pessoa escolher, sem
++ * nunca decidir isso sozinho no cliente.
++ */
++export function FamilyGate({ children }: { children: React.ReactNode }) {
++  const [data, setData] = useState<MyTenantsResponse | null>(null);
++  const [error, setError] = useState<string | null>(null);
++
++  function load() {
++    setError(null);
++    apiFetch<MyTenantsResponse>('/accounts/me/tenants')
++      .then((res) => {
++        // Preferência guardada localmente que não corresponde a mais
++        // nenhuma membership real (revogada, por exemplo) — descarta em
++        // vez de continuar mandando um x-tenant-id que o backend vai recusar.
++        const stored = getStoredTenantId();
++        if (stored && !res.memberships.some((m) => m.tenantId === stored)) {
++          clearStoredTenantId();
++        }
++        setData(res);
++      })
++      .catch((err) => setError(err.message));
++  }
++
++  useEffect(load, []);
++
++  function choose(tenantId: string) {
++    setStoredTenantId(tenantId);
++    // Reload cheio: garante que toda tela/estado já montado passe a usar
++    // o novo x-tenant-id, em vez de misturar dados de duas famílias na
++    // mesma sessão de componentes React.
++    window.location.reload();
++  }
++
++  if (error) {
++    return (
++      <main className="flex min-h-screen items-center justify-center p-8">
++        <ErrorState title="Não foi possível carregar suas famílias" description={error} onRetry={load} />
++      </main>
++    );
++  }
++
++  if (!data) {
++    return (
++      <main className="flex min-h-screen items-center justify-center">
++        <LoadingState label="Carregando…" />
++      </main>
++    );
++  }
++
++  const needsChoice = !data.currentTenantId && data.memberships.length > 1;
++
++  if (needsChoice) {
++    return (
++      <main className="flex min-h-screen items-center justify-center p-8">
++        <Card className="w-full max-w-sm">
++          <h1 className="text-xl font-semibold text-ink">Qual família você quer acessar?</h1>
++          <p className="mt-2 text-sm text-inkMuted">Sua conta participa de mais de uma família na ZELII.</p>
++          <div className="mt-4 flex flex-col gap-2">
++            {data.memberships.map((m) => (
++              <Button key={m.tenantId} variant="secondary" onClick={() => choose(m.tenantId)}>
++                <span className="flex w-full flex-col items-start">
++                  <span>{m.tenantName}</span>
++                  <span className="text-xs font-normal text-inkMuted">como {m.personDisplayName}</span>
++                </span>
++              </Button>
++            ))}
++          </div>
++        </Card>
++      </main>
++    );
++  }
++
++  // currentTenantId já resolvido pelo backend (só 1 membership, ou o
++  // x-tenant-id enviado já era válido) — mantém a preferência local em
++  // sincronia pra próxima chamada de apiFetch.
++  if (data.currentTenantId && getStoredTenantId() !== data.currentTenantId) {
++    setStoredTenantId(data.currentTenantId);
++  }
++
++  return <>{children}</>;
++}
+diff --git a/apps/web/src/lib/api-client.ts b/apps/web/src/lib/api-client.ts
+index 329d0a8..bf44e86 100644
+--- a/apps/web/src/lib/api-client.ts
++++ b/apps/web/src/lib/api-client.ts
+@@ -1,6 +1,7 @@
+ 'use client';
+ 
+ import { getSupabaseBrowserClient } from './supabase-client';
++import { getStoredTenantId } from './tenant-context';
+ 
+ const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
+ 
+@@ -26,11 +27,18 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
+     data: { session },
+   } = await supabase.auth.getSession();
+ 
++  // Seletor multi-família (§10/§68): o backend só honra este header se ele
++  // corresponder a uma membership ACTIVE da própria conta (AuthGuard
++  // rejeita qualquer outro valor) — nunca é, por si só, uma alegação de
++  // autorização, só a preferência de qual família esta chamada é sobre.
++  const tenantId = getStoredTenantId();
++
+   const res = await fetch(`${API_BASE_URL}/api/v1${path}`, {
+     ...init,
+     headers: {
+       'Content-Type': 'application/json',
+       ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
++      ...(tenantId ? { 'x-tenant-id': tenantId } : {}),
+       ...init.headers,
+     },
+   });
+diff --git a/apps/web/src/lib/tenant-context.ts b/apps/web/src/lib/tenant-context.ts
+new file mode 100644
+index 0000000..394abdf
+--- /dev/null
++++ b/apps/web/src/lib/tenant-context.ts
+@@ -0,0 +1,44 @@
++'use client';
++
++const STORAGE_KEY = 'zelii.currentTenantId';
++
++/**
++ * Seletor multi-família (§10/§68): o backend já suporta uma Account com
++ * mais de uma membership ACTIVE em account_memberships (uma mesma Person
++ * pode participar de mais de uma FamilyUnit legítima — regra dura do
++ * projeto) e já aceita o header `x-tenant-id` pra escolher qual
++ * membership vale pra cada request (apps/api/src/common/auth.guard.ts).
++ * O que faltava era o frontend de fato usar isso — sem esta escolha,
++ * uma conta com 2+ famílias ficava com `actor.tenantId === null` em
++ * toda chamada e via um erro genérico de "conclua o cadastro".
++ *
++ * Guarda só o id escolhido — nunca a lista de memberships (isso vem
++ * sempre de GET /accounts/me/tenants, nunca é confiado a partir do
++ * cliente). O backend ainda valida, a cada request, que o tenant
++ * enviado aqui realmente pertence à conta autenticada (AuthGuard rejeita
++ * qualquer outro) — isto é só "lembrar a preferência", nunca uma
++ * alegação de autorização por si só.
++ */
++export function getStoredTenantId(): string | null {
++  try {
++    return window.localStorage.getItem(STORAGE_KEY);
++  } catch {
++    return null;
++  }
++}
++
++export function setStoredTenantId(tenantId: string): void {
++  try {
++    window.localStorage.setItem(STORAGE_KEY, tenantId);
++  } catch {
++    // localStorage indisponível (modo privado, etc.) — a escolha simplesmente não persiste entre sessões.
++  }
++}
++
++export function clearStoredTenantId(): void {
++  try {
++    window.localStorage.removeItem(STORAGE_KEY);
++  } catch {
++    // idem
++  }
++}
+-- 
+2.43.0
+

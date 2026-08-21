@@ -1,0 +1,406 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 21 Aug 2026 03:33:44 +0000
+Subject: [PATCH 10/11] test(zelii-p0): 14 - testes minimos proporcionais das
+ mudancas do P0
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Cobertura direcionada ao que mudou nesta fase, nao um esforco de
+cobertura geral:
+
+apps/api/test/requests.test.ts (novo, 6 testes) - RequestsService nao
+tinha NENHUM arquivo de teste antes, o que e exatamente como o bug do
+item 10 (create() inserindo status:'SENT' direto, violando a RLS que
+exige DRAFT) passou despercebido. Cobre:
+- create() insere DRAFT antes de SENT, nunca SENT direto.
+- create() loga CREATED e SENT nessa ordem.
+- create() rejeita solicitação pra si mesmo sem tocar o banco.
+- accept() so aceita do destinatario (ForbiddenException pros demais).
+- accept() propaga um erro claro quando o update de efeito em
+  calendar_events bate 0 linhas (a negacao de RLS que antes era
+  engolida em silencio - o outro fix do item 10).
+- accept() aplica o efeito e transiciona pra ACCEPTED no caminho feliz.
+
+apps/api/test/accounts.test.ts (novo, 2 testes) - AccountsService.
+listMyTenants: retorna lista vazia sem tentar nenhuma query quando a
+conta ainda nao tem membership nenhuma, e resolve tenantName/
+personDisplayName pra cada membership mesmo com currentTenantId ainda
+null (o caso de 2+ familias sem x-tenant-id ainda escolhido - a
+motivacao inteira do endpoint).
+
+apps/web/test/status-i18n.test.ts (novo, 4 testes) - primeiro teste do
+apps/web, que nao tinha nenhuma infra de teste (script "test" era so um
+echo). Adicionado vitest.config.ts minimo (environment: node, sem
+jsdom/Testing Library - nao ha teste de renderização de componente
+React nesta passada, entao nao se justifica o peso disso agora) e
+vitest como devDependency. Cobre translateStatus: tradução de enum
+conhecido com o tom certo, categorias MEDICAL_* saindo com tone
+'critical' (§4), fallback title-case pra valor desconhecido (nunca o
+enum bruto), e pelo menos uma tradução real de cada um dos 9 domínios.
+
+pnpm-lock.yaml atualizado por `pnpm install --filter @family-app/web...`
+depois de adicionar vitest a apps/web/package.json.
+
+Escopo consciente do que NAO foi feito: sem testes de componente React
+(nenhuma infra de DOM configurada), sem teste de mobile (script "test"
+continua um placeholder, README inexistente igual ao de web estava),
+sem teste E2E de browser dos fluxos novos (Hoje/Captura/Onboarding/
+seletor de família) - todos verificados manualmente via typecheck+lint
+a cada commit anterior deste P0, mas não por teste automatizado.
+
+Verificado: `pnpm test` na raiz do monorepo - 28 tasks, todas passando
+(16 do cache turbo, 12 executadas agora), incluindo os 8 testes novos
+de apps/api e os 4 novos de apps/web. As suites de integração RLS de
+packages/database seguem skipped nesta sandbox (precisam de Postgres
+real via TEST_DATABASE_URL, disponível no CI mas não aqui) - mesmo
+comportamento de antes desta mudança, não afetado por ela.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01NmTzhKuKEdztrGKZyeUHf4
+---
+ apps/api/test/accounts.test.ts    |  76 ++++++++++++++++
+ apps/api/test/requests.test.ts    | 142 ++++++++++++++++++++++++++++++
+ apps/web/package.json             |   5 +-
+ apps/web/test/status-i18n.test.ts |  36 ++++++++
+ apps/web/vitest.config.ts         |  15 ++++
+ pnpm-lock.yaml                    |   3 +
+ 6 files changed, 275 insertions(+), 2 deletions(-)
+ create mode 100644 apps/api/test/accounts.test.ts
+ create mode 100644 apps/api/test/requests.test.ts
+ create mode 100644 apps/web/test/status-i18n.test.ts
+ create mode 100644 apps/web/vitest.config.ts
+
+diff --git a/apps/api/test/accounts.test.ts b/apps/api/test/accounts.test.ts
+new file mode 100644
+index 0000000..98cb848
+--- /dev/null
++++ b/apps/api/test/accounts.test.ts
+@@ -0,0 +1,76 @@
++import { describe, expect, it } from 'vitest';
++import { AccountsService } from '../src/modules/accounts/accounts.service';
++import type { SupabaseService } from '../src/common/supabase.service';
++import type { RequestActor } from '../src/common/auth.guard';
++
++/**
++ * Multi-família (§10/§68). listMyTenants é a única peça de backend nova
++ * do seletor multi-família — cobre o caso que motivou a mudança: uma
++ * conta com 2+ memberships e `tenantId` ainda não resolvido (null).
++ */
++function makeFakeSupabaseClient(responses: Record<string, { data: unknown; error: unknown }>) {
++  function from(table: string) {
++    const builder: Record<string, unknown> = {};
++    for (const method of ['select', 'in']) {
++      builder[method] = () => builder;
++    }
++    builder['then'] = (onFulfilled: (v: unknown) => unknown) =>
++      Promise.resolve(responses[table] ?? { data: [], error: null }).then(onFulfilled);
++    return builder;
++  }
++  return { client: { from } };
++}
++
++describe('AccountsService.listMyTenants', () => {
++  it('returns an empty list without querying anything for a brand-new account (no memberships yet)', async () => {
++    const { client } = makeFakeSupabaseClient({});
++    const service = new AccountsService({ forUser: () => client } as unknown as SupabaseService);
++    const actor: RequestActor = {
++      authUserId: 'auth-x',
++      tenantId: null,
++      personId: null,
++      bearerToken: 'token-x',
++      tenantMemberships: [],
++    };
++
++    const result = await service.listMyTenants(actor);
++    expect(result).toEqual({ currentTenantId: null, memberships: [] });
++  });
++
++  it('resolves tenant/person names for every ACTIVE membership, even when currentTenantId is still ambiguous (null)', async () => {
++    const { client } = makeFakeSupabaseClient({
++      tenants: {
++        data: [
++          { id: 'tenant-a', name: 'Família Silva' },
++          { id: 'tenant-b', name: 'Família Costa' },
++        ],
++        error: null,
++      },
++      persons: {
++        data: [
++          { id: 'person-ana-a', display_name: 'Ana' },
++          { id: 'person-ana-b', display_name: 'Ana (cuidadora)' },
++        ],
++        error: null,
++      },
++    });
++    const service = new AccountsService({ forUser: () => client } as unknown as SupabaseService);
++    const actor: RequestActor = {
++      authUserId: 'auth-ana',
++      tenantId: null, // AuthGuard não escolheu — 2+ memberships e nenhum x-tenant-id enviado
++      personId: null,
++      bearerToken: 'token-ana',
++      tenantMemberships: [
++        { tenantId: 'tenant-a', personId: 'person-ana-a' },
++        { tenantId: 'tenant-b', personId: 'person-ana-b' },
++      ],
++    };
++
++    const result = await service.listMyTenants(actor);
++    expect(result.currentTenantId).toBeNull();
++    expect(result.memberships).toEqual([
++      { tenantId: 'tenant-a', personId: 'person-ana-a', tenantName: 'Família Silva', personDisplayName: 'Ana' },
++      { tenantId: 'tenant-b', personId: 'person-ana-b', tenantName: 'Família Costa', personDisplayName: 'Ana (cuidadora)' },
++    ]);
++  });
++});
+diff --git a/apps/api/test/requests.test.ts b/apps/api/test/requests.test.ts
+new file mode 100644
+index 0000000..10a41ab
+--- /dev/null
++++ b/apps/api/test/requests.test.ts
+@@ -0,0 +1,142 @@
++import { describe, expect, it, vi } from 'vitest';
++import { RequestsService } from '../src/modules/requests/requests.service';
++import type { AuditService } from '../src/common/audit.service';
++import type { SupabaseService } from '../src/common/supabase.service';
++import type { RequestActor } from '../src/common/auth.guard';
++
++/**
++ * Family Request Engine (§30-37) — service-level tests with faked
++ * dependencies, same per-table response-queue approach as
++ * care-network.test.ts. Added alongside the zelii-p0 §10 fix: create()
++ * previously inserted `status: 'SENT'` directly, which the real
++ * `requests_insert_as_requester` RLS policy (supabase/migrations/
++ * 20260820000020_care_schedule_window_handoff_requests.sql) rejects —
++ * it requires `status = 'DRAFT'` at insert, with SENT only reachable via
++ * a follow-up UPDATE. This file existed nowhere before that fix, which
++ * is exactly how the bug went unnoticed.
++ */
++function makeFakeSupabaseClient(responses: Record<string, Array<{ data: unknown; error: unknown }>>) {
++  const counters: Record<string, number> = {};
++  const inserted: Record<string, unknown[]> = {};
++  const updated: Record<string, unknown[]> = {};
++
++  function resolveFor(table: string) {
++    const queue = responses[table] ?? [];
++    const idx = counters[table] ?? 0;
++    counters[table] = idx + 1;
++    return queue[idx] ?? queue[queue.length - 1] ?? { data: null, error: null };
++  }
++
++  function from(table: string) {
++    const builder: Record<string, unknown> = {};
++    for (const method of ['select', 'eq', 'order']) {
++      builder[method] = () => builder;
++    }
++    builder['insert'] = (row: unknown) => {
++      inserted[table] = inserted[table] ?? [];
++      inserted[table].push(row);
++      return builder;
++    };
++    builder['update'] = (patch: unknown) => {
++      updated[table] = updated[table] ?? [];
++      updated[table].push(patch);
++      return builder;
++    };
++    builder['then'] = (onFulfilled: (v: unknown) => unknown) => Promise.resolve(resolveFor(table)).then(onFulfilled);
++    builder['single'] = async () => resolveFor(table);
++    builder['maybeSingle'] = async () => resolveFor(table);
++    return builder;
++  }
++
++  return { client: { from }, inserted, updated };
++}
++
++const ANA: RequestActor = { authUserId: 'auth-ana', tenantId: 'tenant-1', personId: 'ana', bearerToken: 'token-ana' } as RequestActor;
++const BRUNO: RequestActor = { authUserId: 'auth-bruno', tenantId: 'tenant-1', personId: 'bruno', bearerToken: 'token-bruno' } as RequestActor;
++
++function makeService(responses: Record<string, Array<{ data: unknown; error: unknown }>>, auditRecord = vi.fn().mockResolvedValue(undefined)) {
++  const { client, inserted, updated } = makeFakeSupabaseClient(responses);
++  const service = new RequestsService({ forUser: () => client } as unknown as SupabaseService, { record: auditRecord } as unknown as AuditService);
++  return { service, inserted, updated, auditRecord };
++}
++
++describe('RequestsService.create — DRAFT->SENT (zelii-p0 §10 fix)', () => {
++  it('inserts as DRAFT first, never SENT directly', async () => {
++    const draftRow = { id: 'req-1', status: 'DRAFT', requested_to_person_id: 'bruno', subject_person_id: 'pedro' };
++    const sentRow = { ...draftRow, status: 'SENT' };
++    const { service, inserted } = makeService({
++      requests: [
++        { data: draftRow, error: null }, // insert().select().single()
++        { data: sentRow, error: null }, // update({status:'SENT'}).eq().select().single()
++      ],
++    });
++
++    const result = await service.create(ANA, { type: 'PICKUP_REQUEST', requestedToPersonId: 'bruno', subjectPersonId: 'pedro' });
++
++    expect((inserted.requests[0] as Record<string, unknown>).status).toBe('DRAFT');
++    expect(result.status).toBe('SENT');
++  });
++
++  it('logs both CREATED and SENT actions', async () => {
++    const draftRow = { id: 'req-2', status: 'DRAFT', requested_to_person_id: 'bruno' };
++    const { service, inserted } = makeService({
++      requests: [{ data: draftRow, error: null }, { data: { ...draftRow, status: 'SENT' }, error: null }],
++    });
++
++    await service.create(ANA, { type: 'INFORMATION_REQUEST', requestedToPersonId: 'bruno' });
++
++    const actions = (inserted.request_actions ?? []) as Array<Record<string, unknown>>;
++    expect(actions.map((a) => a.action_type)).toEqual(['CREATED', 'SENT']);
++  });
++
++  it('rejects a request targeted at the actor themselves without touching the DB', async () => {
++    const { service, inserted } = makeService({});
++
++    await expect(service.create(ANA, { type: 'OTHER', requestedToPersonId: 'ana' })).rejects.toThrow();
++    expect(inserted.requests ?? []).toHaveLength(0);
++  });
++});
++
++describe('RequestsService.accept', () => {
++  const baseRequest = {
++    id: 'req-3',
++    status: 'SENT',
++    type: 'RESPONSIBILITY_TRANSFER',
++    requested_by_person_id: 'ana',
++    requested_to_person_id: 'bruno',
++    subject_person_id: 'pedro',
++    related_resource_type: 'calendar_events',
++    related_resource_id: 'event-1',
++  };
++
++  it('only the recipient may accept', async () => {
++    const { service } = makeService({ requests: [{ data: baseRequest, error: null }] });
++    await expect(service.accept(ANA, 'req-3')).rejects.toThrow(/Somente o destinatário/);
++  });
++
++  it('surfaces a clear error instead of silently no-oping when the RLS-gated effect update matches no row (zelii-p0 §10 fix)', async () => {
++    const { service } = makeService({
++      requests: [{ data: baseRequest, error: null }],
++      // calendar_events update().eq().select('id').maybeSingle() -> no row visible/editable per RLS
++      calendar_events: [{ data: null, error: null }],
++    });
++
++    await expect(service.accept(BRUNO, 'req-3')).rejects.toThrow(/permissão/);
++  });
++
++  it('applies the effect and transitions to ACCEPTED when the effect update succeeds', async () => {
++    const { service, updated } = makeService({
++      requests: [
++        { data: baseRequest, error: null }, // loadRequestOrThrow
++        { data: { ...baseRequest, status: 'ACCEPTED' }, error: null }, // final status update
++      ],
++      calendar_events: [{ data: { id: 'event-1' }, error: null }],
++    });
++
++    const result = await service.accept(BRUNO, 'req-3', 'ok');
++
++    expect(result.status).toBe('ACCEPTED');
++    const calendarUpdate = (updated.calendar_events?.[0] ?? {}) as Record<string, unknown>;
++    expect(calendarUpdate.responsible_person_id).toBe('bruno');
++  });
++});
+diff --git a/apps/web/package.json b/apps/web/package.json
+index 658ec49..b4b9322 100644
+--- a/apps/web/package.json
++++ b/apps/web/package.json
+@@ -8,7 +8,7 @@
+     "start": "next start -p 3100",
+     "lint": "next lint",
+     "typecheck": "tsc --noEmit",
+-    "test": "echo \"no unit tests yet — see apps/web/README.md\"",
++    "test": "vitest run",
+     "clean": "rm -rf .next"
+   },
+   "dependencies": {
+@@ -28,6 +28,7 @@
+     "autoprefixer": "^10.4.20",
+     "postcss": "^8.4.47",
+     "tailwindcss": "^3.4.14",
+-    "typescript": "^5.6.3"
++    "typescript": "^5.6.3",
++    "vitest": "^2.1.4"
+   }
+ }
+diff --git a/apps/web/test/status-i18n.test.ts b/apps/web/test/status-i18n.test.ts
+new file mode 100644
+index 0000000..50bb406
+--- /dev/null
++++ b/apps/web/test/status-i18n.test.ts
+@@ -0,0 +1,36 @@
++import { describe, expect, it } from 'vitest';
++import { translateStatus } from '../src/lib/status-i18n';
++
++describe('translateStatus', () => {
++  it('translates a known enum value with its semantic tone', () => {
++    expect(translateStatus('task', 'DONE')).toEqual({ label: 'Concluída', tone: 'success' });
++    expect(translateStatus('task', 'OVERDUE')).toEqual({ label: 'Atrasada', tone: 'critical' });
++  });
++
++  it('flags MEDICAL_* capture categories as critical tone (§4 — dado de saúde)', () => {
++    expect(translateStatus('captureCategory', 'MEDICAL_PRESCRIPTION').tone).toBe('critical');
++    expect(translateStatus('captureCategory', 'MEDICAL_EXAM').tone).toBe('critical');
++    expect(translateStatus('captureCategory', 'MEDICAL_APPOINTMENT').tone).toBe('critical');
++    // um valor não médico do mesmo domínio não deve carregar o mesmo tom
++    expect(translateStatus('captureCategory', 'ACTIVITY').tone).not.toBe('critical');
++  });
++
++  it('falls back to a humanized title-case label for a value missing from the dictionary, never the raw enum', () => {
++    const result = translateStatus('task', 'SOME_FUTURE_STATUS');
++    expect(result.label).toBe('Some Future Status');
++    expect(result.tone).toBe('neutral');
++    expect(result.label).not.toBe('SOME_FUTURE_STATUS');
++  });
++
++  it('covers every domain with at least one real translation', () => {
++    expect(translateStatus('request', 'ACCEPTED').label).toBe('Aceita');
++    expect(translateStatus('requestAction', 'SENT').label).toBe('Enviada');
++    expect(translateStatus('capture', 'NEEDS_REVIEW').label).toBe('Precisa de revisão');
++    expect(translateStatus('captureProposal', 'EDITED_AND_CONFIRMED').label).toBe('Editado e confirmado');
++    expect(translateStatus('captureProposalTarget', 'CALENDAR_EVENT').label).toContain('evento');
++    expect(translateStatus('handoff', 'DELAYED').label).toBe('Atrasado');
++    expect(translateStatus('responsibility', 'FAILED').label).toBe('Não realizada');
++    expect(translateStatus('calendarCategory', 'HEALTH').tone).toBe('critical');
++    expect(translateStatus('notificationLevel', 'CRITICAL').tone).toBe('critical');
++  });
++});
+diff --git a/apps/web/vitest.config.ts b/apps/web/vitest.config.ts
+new file mode 100644
+index 0000000..b051b00
+--- /dev/null
++++ b/apps/web/vitest.config.ts
+@@ -0,0 +1,15 @@
++import { defineConfig } from 'vitest/config';
++
++/**
++ * Testes de lógica pura (sem DOM/React) — apps/web/src/lib. Testar
++ * componentes React exigiria jsdom + Testing Library, um investimento
++ * maior que o proporcional a este passo do P0; o que vale testar agora
++ * é a lógica que já tem efeito em várias telas por trás dos componentes
++ * de UI, como translateStatus (todo StatusBadge passa por ela).
++ */
++export default defineConfig({
++  test: {
++    include: ['test/**/*.test.ts'],
++    environment: 'node',
++  },
++});
+diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
+index bc7aa76..5ba6d14 100644
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -237,6 +237,9 @@ importers:
+       typescript:
+         specifier: ^5.6.3
+         version: 5.9.3
++      vitest:
++        specifier: ^2.1.4
++        version: 2.1.9(@types/node@22.20.1)(terser@5.50.0)
+ 
+   packages/ai:
+     dependencies:
+-- 
+2.43.0
+

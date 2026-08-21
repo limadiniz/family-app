@@ -1,0 +1,62 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 21 Aug 2026 03:10:53 +0000
+Subject: [PATCH 05/11] feat(zelii-p0): 6.5 - reescrever hero do site publico
+ (copy orientado a resultado)
+
+A home era a unica pagina publica que ainda nao usava nenhuma das
+falas de marca do prompt mestre nem dizia 'ZELII' uma vez sequer -
+layout.tsx (title/description) ja usava desde o commit 3183179, mas o
+corpo da pagina continuava com um headline generico ('Voce nao precisa
+lembrar de tudo').
+
+- H1 agora e a fala de marca orientada a processo: 'A ZELII recebe o
+  que chegou, mostra o que precisa acontecer e deixa claro quem esta
+  cuidando.' - descreve o que acontece, nao uma promessa abstrata.
+  Adicionado eyebrow 'ZELII - O cuidado em sintonia' acima do H1.
+- Subheadline trocado por 'ZELII organiza o cuidado entre todos que
+  fazem parte da rotina da familia', mantendo a lista concreta de
+  dominios (agenda, escola, saude, medicamentos, documentos, rede de
+  cuidado) que ja existia.
+- CTAs inalterados.
+
+As demais paginas publicas (produto, como-funciona, familias, seguranca,
+precos, ajuda) ja tinham sido revisadas no commit 3183179 e ja usam
+ZELII + copy concreta (ex.: o exemplo real em como-funciona/page.tsx) -
+nao foram reescritas de novo aqui pra nao mexer em conteudo que ja
+estava correto e verificado.
+
+Verificado: typecheck e lint de @family-app/web limpos.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01NmTzhKuKEdztrGKZyeUHf4
+---
+ apps/web/src/app/page.tsx | 10 +++++-----
+ 1 file changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/apps/web/src/app/page.tsx b/apps/web/src/app/page.tsx
+index 5130a5e..4b4f156 100644
+--- a/apps/web/src/app/page.tsx
++++ b/apps/web/src/app/page.tsx
+@@ -6,13 +6,13 @@ export default function HomePage() {
+     <>
+       <SiteNav />
+       <main className="mx-auto max-w-3xl px-6 py-24 text-center">
+-        <h1 className="text-4xl font-semibold tracking-tight text-ink sm:text-5xl">
+-          Você não precisa lembrar de tudo.
+-          <br />A plataforma lembra com você.
++        <p className="text-sm font-semibold uppercase tracking-wide text-primary">ZELII — O cuidado em sintonia</p>
++        <h1 className="mt-3 text-4xl font-semibold tracking-tight text-ink sm:text-5xl">
++          A ZELII recebe o que chegou, mostra o que precisa acontecer e deixa claro quem está cuidando.
+         </h1>
+         <p className="mx-auto mt-6 max-w-xl text-lg text-inkMuted">
+-          Agenda, escola, saúde, medicamentos, cuidadores e documentos da sua família — organizados em um só
+-          lugar, com as permissões certas para cada pessoa que cuida.
++          ZELII organiza o cuidado entre todos que fazem parte da rotina da família — agenda, escola, saúde,
++          medicamentos, documentos e a rede de quem cuida, com a permissão certa para cada pessoa.
+         </p>
+         <div className="mt-10 flex justify-center gap-4">
+           <Link href="/cadastro" className="rounded-md bg-primary px-6 py-3 font-medium text-white hover:opacity-90">
+-- 
+2.43.0
+

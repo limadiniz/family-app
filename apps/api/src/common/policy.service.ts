@@ -46,12 +46,21 @@ export class PolicyService {
         .select('domain, action, valid_from, valid_until, revoked_at')
         .eq('grantee_person_id', actor.personId)
         .eq('subject_person_id', subjectPersonId),
+      // BUGFIX (V3 gap analysis, §82 "babá perde acesso após CareWindow"):
+      // nothing in this codebase ever transitioned a CareWindow's status
+      // from SCHEDULED to ACTIVE (there's no cron/trigger for it), so
+      // `.eq('status', 'ACTIVE')` never matched a real row and this grant
+      // path was silently dead — a caregiver never actually got the
+      // just-in-time access a CareWindow is supposed to confer. The time
+      // bounds below are the real gate (a window whose time has passed
+      // stays excluded regardless of status); CANCELLED is the only
+      // status that must veto access even inside the time bounds.
       client
         .from('care_windows')
         .select('id')
         .eq('caregiver_person_id', actor.personId)
         .eq('child_person_id', subjectPersonId)
-        .eq('status', 'ACTIVE')
+        .in('status', ['SCHEDULED', 'ACTIVE'])
         .lte('starts_at', now)
         .gte('ends_at', now)
         .limit(1),

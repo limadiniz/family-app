@@ -1,0 +1,793 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 21 Aug 2026 03:05:46 +0000
+Subject: [PATCH 03/11] =?UTF-8?q?feat(zelii-p0):=206.3=20=E2=80=94=20camad?=
+ =?UTF-8?q?a=20m=C3=ADnima=20de=20componentes=20web?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Design system compartilhado para as telas internas (§6.3 do prompt
+mestre ZELII):
+
+- status-i18n.ts: dicionário de tradução enum→pt-BR (task/request/
+  requestAction/capture/captureProposal/handoff/responsibility/
+  calendarCategory/notificationLevel) com StatusTone semântico e
+  fallback title-case para valores não mapeados — nenhum enum bruto
+  deve chegar à UI (débito conhecido: ai/page.tsx ainda expõe um,
+  fica para quando essas páginas forem migradas para o design system).
+- button.tsx: Button (primary/secondary/ghost/destructive) e IconButton
+  (aria-label obrigatório) — alvo de toque mínimo 44px.
+- input.tsx: Input/Textarea/Select com FieldWrapper compartilhado
+  (useId, aria-invalid, aria-describedby).
+- card.tsx: Card e ActionCard (Link ou button, nunca os dois).
+- status-badge.tsx: chip tint+dot sobre translateStatus — texto sempre
+  em `ink`, nunca a cor de acento (ver nota de contraste em
+  packages/ui/src/tokens.ts).
+- states.tsx: EmptyState/LoadingState/ErrorState — erro isolado a um
+  widget, nunca derruba a página inteira (§7).
+- person.tsx: PersonAvatar (iniciais com tint estável por id, <img>
+  puro em vez de next/image porque avatarUrl ainda não tem domínio
+  fixado em next.config.js) e PersonPicker (radiogroup acessível;
+  espera lista já filtrada pelo Policy Engine, nunca decide sozinho
+  quem pode ser escolhido).
+- sensitive-data-notice.tsx: SensitiveDataNotice e AccessUntil (usa
+  AuthorityGrant.validUntil) — só comunicam estado já decidido pelo
+  backend, nunca controlam acesso no cliente (§10).
+- index.ts: barrel único em @/components/ui.
+
+Verificado: typecheck e lint de @family-app/web limpos. Nenhum arquivo
+existente foi alterado — adoção nas páginas atuais fica para a próxima
+etapa (6.4 em diante).
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01NmTzhKuKEdztrGKZyeUHf4
+---
+ apps/web/src/components/ui/button.tsx         |  67 +++++++++
+ apps/web/src/components/ui/card.tsx           |  54 ++++++++
+ apps/web/src/components/ui/index.ts           |  13 ++
+ apps/web/src/components/ui/input.tsx          | 117 ++++++++++++++++
+ apps/web/src/components/ui/page-header.tsx    |  21 +++
+ apps/web/src/components/ui/person.tsx         | 112 +++++++++++++++
+ .../components/ui/sensitive-data-notice.tsx   |  58 ++++++++
+ apps/web/src/components/ui/states.tsx         |  63 +++++++++
+ apps/web/src/components/ui/status-badge.tsx   |  30 ++++
+ apps/web/src/lib/status-i18n.ts               | 128 ++++++++++++++++++
+ 10 files changed, 663 insertions(+)
+ create mode 100644 apps/web/src/components/ui/button.tsx
+ create mode 100644 apps/web/src/components/ui/card.tsx
+ create mode 100644 apps/web/src/components/ui/index.ts
+ create mode 100644 apps/web/src/components/ui/input.tsx
+ create mode 100644 apps/web/src/components/ui/page-header.tsx
+ create mode 100644 apps/web/src/components/ui/person.tsx
+ create mode 100644 apps/web/src/components/ui/sensitive-data-notice.tsx
+ create mode 100644 apps/web/src/components/ui/states.tsx
+ create mode 100644 apps/web/src/components/ui/status-badge.tsx
+ create mode 100644 apps/web/src/lib/status-i18n.ts
+
+diff --git a/apps/web/src/components/ui/button.tsx b/apps/web/src/components/ui/button.tsx
+new file mode 100644
+index 0000000..53cd57d
+--- /dev/null
++++ b/apps/web/src/components/ui/button.tsx
+@@ -0,0 +1,67 @@
++'use client';
++
++import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from 'react';
++
++type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'destructive';
++type ButtonSize = 'md' | 'sm';
++
++const VARIANT_CLASSES: Record<ButtonVariant, string> = {
++  // primary: preenchimento sólido `primary` + texto branco 16px semibold —
++  // ver a nota de contraste em packages/ui/src/tokens.ts (fica no piso AA
++  // para texto grande/negrito, não para texto pequeno; por isso o padrão
++  // aqui nunca cai abaixo de text-base font-semibold).
++  primary: 'bg-primary text-white hover:opacity-90 disabled:opacity-50',
++  secondary: 'bg-surfaceMuted text-ink hover:opacity-80 disabled:opacity-50',
++  ghost: 'bg-transparent text-ink hover:bg-surfaceMuted disabled:opacity-50',
++  destructive: 'bg-critical text-white hover:opacity-90 disabled:opacity-50',
++};
++
++const SIZE_CLASSES: Record<ButtonSize, string> = {
++  md: 'min-h-touch px-4 text-base font-semibold',
++  sm: 'min-h-touch px-3 text-sm font-medium',
++};
++
++interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
++  variant?: ButtonVariant;
++  size?: ButtonSize;
++  children: ReactNode;
++}
++
++/** Botão base do design system (ZELII P0 §6.3) — alvo de toque ≥44px, foco visível herdado do :focus-visible global. */
++export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
++  { variant = 'primary', size = 'md', className = '', children, ...props },
++  ref,
++) {
++  return (
++    <button
++      ref={ref}
++      className={`inline-flex items-center justify-center gap-2 rounded-md transition-colors disabled:cursor-not-allowed ${VARIANT_CLASSES[variant]} ${SIZE_CLASSES[size]} ${className}`}
++      {...props}
++    >
++      {children}
++    </button>
++  );
++});
++
++interface IconButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
++  variant?: ButtonVariant;
++  /** Obrigatório — um botão só de ícone sem rótulo acessível é um beco sem saída pra leitor de tela. */
++  'aria-label': string;
++  children: ReactNode;
++}
++
++/** Botão só-ícone, mesmo alvo de toque mínimo de 44px do Button. */
++export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(function IconButton(
++  { variant = 'ghost', className = '', children, ...props },
++  ref,
++) {
++  return (
++    <button
++      ref={ref}
++      className={`inline-flex min-h-touch min-w-touch items-center justify-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${VARIANT_CLASSES[variant]} ${className}`}
++      {...props}
++    >
++      {children}
++    </button>
++  );
++});
+diff --git a/apps/web/src/components/ui/card.tsx b/apps/web/src/components/ui/card.tsx
+new file mode 100644
+index 0000000..91e6a93
+--- /dev/null
++++ b/apps/web/src/components/ui/card.tsx
+@@ -0,0 +1,54 @@
++'use client';
++
++import Link from 'next/link';
++import type { ReactNode } from 'react';
++
++interface CardProps {
++  children: ReactNode;
++  className?: string;
++}
++
++/** Contêiner base — raio grande (14–20px) e superfície neutra, usado por toda tela interna. */
++export function Card({ children, className = '' }: CardProps) {
++  return <div className={`rounded-lg border border-border bg-surface p-6 ${className}`}>{children}</div>;
++}
++
++interface ActionCardProps {
++  title: string;
++  description?: string;
++  icon?: ReactNode;
++  href?: string;
++  onClick?: () => void;
++  className?: string;
++}
++
++/**
++ * Cartão clicável (rota interna via `href`, ou ação via `onClick`) —
++ * nunca os dois ao mesmo tempo. Sempre um elemento nativamente focável
++ * (`<a>`/`<button>`), nunca uma `<div onClick>` inacessível a teclado.
++ */
++export function ActionCard({ title, description, icon, href, onClick, className = '' }: ActionCardProps) {
++  const content = (
++    <>
++      {icon && <div className="text-primary">{icon}</div>}
++      <div className="flex-1">
++        <p className="font-medium text-ink">{title}</p>
++        {description && <p className="mt-0.5 text-sm text-inkMuted">{description}</p>}
++      </div>
++    </>
++  );
++  const classes = `flex min-h-touch w-full items-center gap-3 rounded-lg border border-border bg-surface p-4 text-left transition-colors hover:bg-surfaceMuted ${className}`;
++
++  if (href) {
++    return (
++      <Link href={href} className={classes}>
++        {content}
++      </Link>
++    );
++  }
++  return (
++    <button type="button" onClick={onClick} className={classes}>
++      {content}
++    </button>
++  );
++}
+diff --git a/apps/web/src/components/ui/index.ts b/apps/web/src/components/ui/index.ts
+new file mode 100644
+index 0000000..480fa99
+--- /dev/null
++++ b/apps/web/src/components/ui/index.ts
+@@ -0,0 +1,13 @@
++/**
++ * Camada mínima de componentes ZELII P0 §6.3 — reexporta tudo em um
++ * único ponto de entrada (`@/components/ui`) para as páginas existentes
++ * adotarem incrementalmente sem precisar apontar para cada arquivo.
++ */
++export { Button, IconButton } from './button';
++export { Input, Textarea, Select } from './input';
++export { Card, ActionCard } from './card';
++export { StatusBadge } from './status-badge';
++export { EmptyState, LoadingState, ErrorState } from './states';
++export { PersonAvatar, PersonPicker, type PersonSummary } from './person';
++export { PageHeader } from './page-header';
++export { SensitiveDataNotice, AccessUntil } from './sensitive-data-notice';
+diff --git a/apps/web/src/components/ui/input.tsx b/apps/web/src/components/ui/input.tsx
+new file mode 100644
+index 0000000..784ae35
+--- /dev/null
++++ b/apps/web/src/components/ui/input.tsx
+@@ -0,0 +1,117 @@
++'use client';
++
++import { forwardRef, useId, type InputHTMLAttributes, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react';
++
++const FIELD_CLASSES =
++  'min-h-touch w-full rounded-md border border-border bg-surface px-3 py-2 text-base text-ink placeholder:text-inkMuted disabled:cursor-not-allowed disabled:opacity-50';
++
++interface FieldWrapperProps {
++  label?: string;
++  error?: string;
++  hint?: string;
++  id: string;
++  children: React.ReactNode;
++}
++
++function FieldWrapper({ label, error, hint, id, children }: FieldWrapperProps) {
++  return (
++    <div className="flex flex-col gap-1.5">
++      {label && (
++        <label htmlFor={id} className="text-sm font-medium text-ink">
++          {label}
++        </label>
++      )}
++      {children}
++      {hint && !error && (
++        <p id={`${id}-hint`} className="text-xs text-inkMuted">
++          {hint}
++        </p>
++      )}
++      {error && (
++        <p id={`${id}-error`} role="alert" className="text-xs text-critical">
++          {error}
++        </p>
++      )}
++    </div>
++  );
++}
++
++interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
++  label?: string;
++  error?: string;
++  hint?: string;
++}
++
++export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
++  { label, error, hint, id, className = '', ...props },
++  ref,
++) {
++  const autoId = useId();
++  const fieldId = id ?? autoId;
++  return (
++    <FieldWrapper label={label} error={error} hint={hint} id={fieldId}>
++      <input
++        ref={ref}
++        id={fieldId}
++        aria-invalid={!!error}
++        aria-describedby={error ? `${fieldId}-error` : hint ? `${fieldId}-hint` : undefined}
++        className={`${FIELD_CLASSES} ${error ? 'border-critical' : ''} ${className}`}
++        {...props}
++      />
++    </FieldWrapper>
++  );
++});
++
++interface TextareaProps extends TextareaHTMLAttributes<HTMLTextAreaElement> {
++  label?: string;
++  error?: string;
++  hint?: string;
++}
++
++export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(function Textarea(
++  { label, error, hint, id, className = '', ...props },
++  ref,
++) {
++  const autoId = useId();
++  const fieldId = id ?? autoId;
++  return (
++    <FieldWrapper label={label} error={error} hint={hint} id={fieldId}>
++      <textarea
++        ref={ref}
++        id={fieldId}
++        aria-invalid={!!error}
++        aria-describedby={error ? `${fieldId}-error` : hint ? `${fieldId}-hint` : undefined}
++        className={`${FIELD_CLASSES} min-h-24 ${error ? 'border-critical' : ''} ${className}`}
++        {...props}
++      />
++    </FieldWrapper>
++  );
++});
++
++interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
++  label?: string;
++  error?: string;
++  hint?: string;
++}
++
++export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select(
++  { label, error, hint, id, className = '', children, ...props },
++  ref,
++) {
++  const autoId = useId();
++  const fieldId = id ?? autoId;
++  return (
++    <FieldWrapper label={label} error={error} hint={hint} id={fieldId}>
++      <select
++        ref={ref}
++        id={fieldId}
++        aria-invalid={!!error}
++        aria-describedby={error ? `${fieldId}-error` : hint ? `${fieldId}-hint` : undefined}
++        className={`${FIELD_CLASSES} ${error ? 'border-critical' : ''} ${className}`}
++        {...props}
++      >
++        {children}
++      </select>
++    </FieldWrapper>
++  );
++});
+diff --git a/apps/web/src/components/ui/page-header.tsx b/apps/web/src/components/ui/page-header.tsx
+new file mode 100644
+index 0000000..0b7294f
+--- /dev/null
++++ b/apps/web/src/components/ui/page-header.tsx
+@@ -0,0 +1,21 @@
++import type { ReactNode } from 'react';
++
++interface PageHeaderProps {
++  title: string;
++  description?: string;
++  actions?: ReactNode;
++  className?: string;
++}
++
++/** Cabeçalho padrão de tela interna — título + descrição curta + ações à direita (desktop) / abaixo (mobile). */
++export function PageHeader({ title, description, actions, className = '' }: PageHeaderProps) {
++  return (
++    <div className={`flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between ${className}`}>
++      <div>
++        <h1 className="text-xl font-semibold text-ink sm:text-2xl">{title}</h1>
++        {description && <p className="mt-1 text-sm text-inkMuted">{description}</p>}
++      </div>
++      {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
++    </div>
++  );
++}
+diff --git a/apps/web/src/components/ui/person.tsx b/apps/web/src/components/ui/person.tsx
+new file mode 100644
+index 0000000..d9ec2c3
+--- /dev/null
++++ b/apps/web/src/components/ui/person.tsx
+@@ -0,0 +1,112 @@
++'use client';
++
++/**
++ * Subconjunto de Person (packages/domain/src/entities/person.ts) que os
++ * componentes visuais realmente precisam — evita acoplar toda a UI ao
++ * schema Zod completo do domínio.
++ */
++export interface PersonSummary {
++  id: string;
++  displayName: string;
++  avatarUrl?: string | null;
++  isMinor?: boolean;
++}
++
++const SIZE_CLASSES = {
++  sm: 'h-8 w-8 text-xs',
++  md: 'h-11 w-11 text-sm',
++  lg: 'h-14 w-14 text-base',
++} as const;
++
++/** Paleta estável derivada do id — mesma pessoa sempre com a mesma cor, sem precisar guardar isso em lugar nenhum. */
++const AVATAR_TINTS = ['bg-primary/15 text-primary', 'bg-info/15 text-info', 'bg-success/15 text-success', 'bg-warning/15 text-warning'];
++
++function tintFor(id: string) {
++  let hash = 0;
++  for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
++  return AVATAR_TINTS[hash % AVATAR_TINTS.length];
++}
++
++function initialsFor(name: string) {
++  const parts = name.trim().split(/\s+/);
++  const first = parts[0]?.[0] ?? '';
++  const last = parts.length > 1 ? parts[parts.length - 1][0] : '';
++  return (first + last).toUpperCase();
++}
++
++interface PersonAvatarProps {
++  person: PersonSummary;
++  size?: keyof typeof SIZE_CLASSES;
++  className?: string;
++}
++
++/**
++ * Foto se houver `avatarUrl`; caso contrário, iniciais sobre um tint
++ * estável derivado do id. `isMinor` nunca vira um rótulo textual aqui —
++ * é dado sensível de perfil, não decoração (§4: dados de crianças
++ * recebem proteção reforçada, inclusive na superfície visual).
++ */
++export function PersonAvatar({ person, size = 'md', className = '' }: PersonAvatarProps) {
++  const sizeClass = SIZE_CLASSES[size];
++  if (person.avatarUrl) {
++    // <img> puro em vez de next/image: avatarUrl vem de armazenamento do
++    // usuário (ex.: Supabase Storage) com domínio ainda não fixado em
++    // next.config.js `images.remotePatterns` — next/image quebraria em
++    // runtime com "domain not configured" até essa allowlist existir.
++    return (
++      <span className={`block overflow-hidden rounded-full ${sizeClass} ${className}`}>
++        <img src={person.avatarUrl} alt={person.displayName} className="h-full w-full object-cover" />
++      </span>
++    );
++  }
++  return (
++    <span
++      className={`inline-flex shrink-0 items-center justify-center rounded-full font-semibold ${tintFor(person.id)} ${sizeClass} ${className}`}
++      aria-hidden="true"
++    >
++      {initialsFor(person.displayName)}
++    </span>
++  );
++}
++
++interface PersonPickerProps {
++  people: PersonSummary[];
++  value: string | null;
++  onChange: (personId: string) => void;
++  label?: string;
++  className?: string;
++}
++
++/**
++ * Seleção de pessoa via botões nativamente focáveis (não uma div-list) —
++ * usado em captura, atribuição de responsabilidade, etc. Nunca decide
++ * sozinho quem PODE ser escolhido: a lista `people` já deve vir filtrada
++ * pelo backend/Policy Engine (§10) antes de chegar aqui.
++ */
++export function PersonPicker({ people, value, onChange, label, className = '' }: PersonPickerProps) {
++  return (
++    <div className={className}>
++      {label && <p className="mb-2 text-sm font-medium text-ink">{label}</p>}
++      <div role="radiogroup" aria-label={label} className="flex flex-wrap gap-2">
++        {people.map((person) => {
++          const selected = person.id === value;
++          return (
++            <button
++              key={person.id}
++              type="button"
++              role="radio"
++              aria-checked={selected}
++              onClick={() => onChange(person.id)}
++              className={`flex min-h-touch items-center gap-2 rounded-full border pl-1 pr-3 text-sm font-medium transition-colors ${
++                selected ? 'border-primary bg-primary/10 text-ink' : 'border-border bg-surface text-ink hover:bg-surfaceMuted'
++              }`}
++            >
++              <PersonAvatar person={person} size="sm" />
++              {person.displayName}
++            </button>
++          );
++        })}
++      </div>
++    </div>
++  );
++}
+diff --git a/apps/web/src/components/ui/sensitive-data-notice.tsx b/apps/web/src/components/ui/sensitive-data-notice.tsx
+new file mode 100644
+index 0000000..fec27b7
+--- /dev/null
++++ b/apps/web/src/components/ui/sensitive-data-notice.tsx
+@@ -0,0 +1,58 @@
++interface SensitiveDataNoticeProps {
++  /** Descreve o que está sendo mostrado, ex.: "Dados de saúde de Ana". */
++  label: string;
++  className?: string;
++}
++
++/**
++ * Aviso visível de que a tela está exibindo dado protegido (saúde e/ou
++ * de criança — §4). Isto é só a camada de transparência da UI: a
++ * decisão de MOSTRAR ou NÃO já foi tomada pelo backend/Policy Engine
++ * antes destes dados chegarem aqui (§10, "regras críticas nunca só no
++ * frontend"). Este componente nunca controla acesso, só o comunica.
++ */
++export function SensitiveDataNotice({ label, className = '' }: SensitiveDataNoticeProps) {
++  return (
++    <div
++      role="note"
++      className={`flex items-center gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-ink ${className}`}
++    >
++      <svg viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4 shrink-0 text-warning" aria-hidden="true">
++        <path
++          fillRule="evenodd"
++          d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.516-2.625L8.485 2.495ZM10 6a.75.75 0 0 1 .75.75v3.5a.75.75 0 0 1-1.5 0v-3.5A.75.75 0 0 1 10 6Zm0 8a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z"
++          clipRule="evenodd"
++        />
++      </svg>
++      <span>
++        <strong className="font-medium">Dado protegido:</strong> {label}. Visível somente para quem tem autorização.
++      </span>
++    </div>
++  );
++}
++
++interface AccessUntilProps {
++  /** ISO datetime — corresponde a AuthorityGrant.validUntil (packages/domain/src/entities/authority-grant.ts). `null`/`undefined` = sem prazo definido. */
++  validUntil?: string | null;
++  className?: string;
++}
++
++function formatDateTime(iso: string) {
++  return new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(iso));
++}
++
++/**
++ * Mostra até quando um acesso temporário (AuthorityGrant.validUntil)
++ * vale — apenas informativo. A expiração real é aplicada pelo backend
++ * (isGrantCurrentlyActive + RLS), nunca por este componente deixar de
++ * renderizar algo.
++ */
++export function AccessUntil({ validUntil, className = '' }: AccessUntilProps) {
++  if (!validUntil) return null;
++  const expired = new Date(validUntil) < new Date();
++  return (
++    <span className={`inline-flex items-center gap-1 text-xs ${expired ? 'text-critical' : 'text-inkMuted'} ${className}`}>
++      {expired ? 'Acesso expirou em' : 'Acesso até'} {formatDateTime(validUntil)}
++    </span>
++  );
++}
+diff --git a/apps/web/src/components/ui/states.tsx b/apps/web/src/components/ui/states.tsx
+new file mode 100644
+index 0000000..824da9e
+--- /dev/null
++++ b/apps/web/src/components/ui/states.tsx
+@@ -0,0 +1,63 @@
++import type { ReactNode } from 'react';
++import { Button } from './button';
++
++interface EmptyStateProps {
++  title: string;
++  description?: string;
++  action?: { label: string; onClick: () => void };
++}
++
++/** Nada aqui ainda — nunca um espaço em branco silencioso. */
++export function EmptyState({ title, description, action }: EmptyStateProps) {
++  return (
++    <div className="rounded-lg border border-dashed border-border bg-surface p-6 text-center">
++      <p className="text-sm font-medium text-ink">{title}</p>
++      {description && <p className="mt-1 text-sm text-inkMuted">{description}</p>}
++      {action && (
++        <Button variant="secondary" size="sm" onClick={action.onClick} className="mt-4">
++          {action.label}
++        </Button>
++      )}
++    </div>
++  );
++}
++
++interface LoadingStateProps {
++  label?: string;
++}
++
++/** Estado de carregamento — texto, não só um spinner mudo, pra leitor de tela também dizer algo. */
++export function LoadingState({ label = 'Carregando…' }: LoadingStateProps) {
++  return (
++    <div role="status" className="flex items-center gap-2 p-6 text-sm text-inkMuted">
++      <span className="h-4 w-4 animate-spin rounded-full border-2 border-border border-t-primary" aria-hidden="true" />
++      {label}
++    </div>
++  );
++}
++
++interface ErrorStateProps {
++  title?: string;
++  description?: string;
++  onRetry?: () => void;
++  children?: ReactNode;
++}
++
++/**
++ * Erro isolado a UM widget — nunca derruba a página inteira (§7: "um
++ * widget não crítico com erro não deve inutilizar toda a página").
++ */
++export function ErrorState({ title = 'Não foi possível carregar', description, onRetry, children }: ErrorStateProps) {
++  return (
++    <div className="rounded-lg border border-critical/30 bg-critical/5 p-6" role="alert">
++      <p className="text-sm font-medium text-critical">{title}</p>
++      {description && <p className="mt-1 text-sm text-inkMuted">{description}</p>}
++      {children}
++      {onRetry && (
++        <Button variant="secondary" size="sm" onClick={onRetry} className="mt-4">
++          Tentar de novo
++        </Button>
++      )}
++    </div>
++  );
++}
+diff --git a/apps/web/src/components/ui/status-badge.tsx b/apps/web/src/components/ui/status-badge.tsx
+new file mode 100644
+index 0000000..99ea290
+--- /dev/null
++++ b/apps/web/src/components/ui/status-badge.tsx
+@@ -0,0 +1,30 @@
++import { translateStatus, type StatusDomain, type StatusTone } from '@/lib/status-i18n';
++
++const TONE_CLASSES: Record<StatusTone, { bg: string; dot: string }> = {
++  // Fundo = tint claro; texto sempre `ink` (nunca a cor de acento como
++  // texto pequeno — ver a nota de contraste em packages/ui/src/tokens.ts).
++  // O `dot` carrega a cor semântica; o texto não depende dela pra ser lido.
++  neutral: { bg: 'bg-surfaceMuted', dot: 'bg-inkMuted' },
++  info: { bg: 'bg-info/10', dot: 'bg-info' },
++  success: { bg: 'bg-success/10', dot: 'bg-success' },
++  warning: { bg: 'bg-warning/10', dot: 'bg-warning' },
++  critical: { bg: 'bg-critical/10', dot: 'bg-critical' },
++};
++
++interface StatusBadgeProps {
++  domain: StatusDomain;
++  value: string;
++  className?: string;
++}
++
++/** Chip de status traduzido (nunca um enum bruto) — ver apps/web/src/lib/status-i18n.ts. */
++export function StatusBadge({ domain, value, className = '' }: StatusBadgeProps) {
++  const { label, tone } = translateStatus(domain, value);
++  const { bg, dot } = TONE_CLASSES[tone];
++  return (
++    <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium text-ink ${bg} ${className}`}>
++      <span className={`h-1.5 w-1.5 rounded-full ${dot}`} aria-hidden="true" />
++      {label}
++    </span>
++  );
++}
+diff --git a/apps/web/src/lib/status-i18n.ts b/apps/web/src/lib/status-i18n.ts
+new file mode 100644
+index 0000000..f73b346
+--- /dev/null
++++ b/apps/web/src/lib/status-i18n.ts
+@@ -0,0 +1,128 @@
++/**
++ * Tradução central de status/enums para pt-BR (ZELII P0 §6.3). Nunca
++ * exibir um valor de enum bruto (`PENDING`, `TODO`, `CALENDAR_EVENT`,
++ * `RESPONSIBILITY_TRANSFER`, ...) diretamente na interface — todo lugar
++ * que hoje faz `{item.status}` deve passar por `translateStatus` (ou pelo
++ * componente `StatusBadge`, que já usa isso por baixo).
++ *
++ * `tone` decide a cor semântica (ver `packages/ui/src/tokens.ts` para as
++ * notas de contraste) — o texto do badge nunca é a própria cor de acento,
++ * sempre `ink`; `tone` só escolhe a cor do tint de fundo e do indicador.
++ */
++export type StatusTone = 'neutral' | 'info' | 'success' | 'warning' | 'critical';
++
++export type StatusDomain =
++  | 'task'
++  | 'request'
++  | 'requestAction'
++  | 'capture'
++  | 'captureProposal'
++  | 'handoff'
++  | 'responsibility'
++  | 'calendarCategory'
++  | 'notificationLevel';
++
++interface StatusEntry {
++  label: string;
++  tone: StatusTone;
++}
++
++const DICTIONARIES: Record<StatusDomain, Record<string, StatusEntry>> = {
++  task: {
++    TODO: { label: 'A fazer', tone: 'neutral' },
++    IN_PROGRESS: { label: 'Em andamento', tone: 'info' },
++    DONE: { label: 'Concluída', tone: 'success' },
++    CANCELLED: { label: 'Cancelada', tone: 'neutral' },
++    OVERDUE: { label: 'Atrasada', tone: 'critical' },
++  },
++  request: {
++    DRAFT: { label: 'Rascunho', tone: 'neutral' },
++    SENT: { label: 'Enviada', tone: 'info' },
++    VIEWED: { label: 'Vista', tone: 'info' },
++    ACCEPTED: { label: 'Aceita', tone: 'success' },
++    DECLINED: { label: 'Recusada', tone: 'critical' },
++    CANCELLED: { label: 'Cancelada', tone: 'neutral' },
++    EXPIRED: { label: 'Expirada', tone: 'warning' },
++    DISPUTED: { label: 'Em contestação', tone: 'critical' },
++  },
++  requestAction: {
++    CREATED: { label: 'Criada', tone: 'neutral' },
++    SENT: { label: 'Enviada', tone: 'info' },
++    VIEWED: { label: 'Vista', tone: 'info' },
++    ACCEPTED: { label: 'Aceita', tone: 'success' },
++    DECLINED: { label: 'Recusada', tone: 'critical' },
++    CANCELLED: { label: 'Cancelada', tone: 'neutral' },
++    DISPUTED: { label: 'Contestada', tone: 'critical' },
++    COMMENTED: { label: 'Comentário adicionado', tone: 'neutral' },
++    COMPLETED: { label: 'Concluída', tone: 'success' },
++  },
++  capture: {
++    RECEIVED: { label: 'Recebido', tone: 'neutral' },
++    PROCESSING: { label: 'Processando', tone: 'info' },
++    NEEDS_REVIEW: { label: 'Precisa de revisão', tone: 'warning' },
++    READY: { label: 'Pronto para revisão', tone: 'info' },
++    CONFIRMED: { label: 'Confirmado', tone: 'success' },
++    REJECTED: { label: 'Rejeitado', tone: 'neutral' },
++    FAILED: { label: 'Falhou', tone: 'critical' },
++    ARCHIVED: { label: 'Arquivado', tone: 'neutral' },
++  },
++  captureProposal: {
++    PENDING: { label: 'Aguardando confirmação', tone: 'warning' },
++    CONFIRMED: { label: 'Confirmado', tone: 'success' },
++    EDITED_AND_CONFIRMED: { label: 'Editado e confirmado', tone: 'success' },
++    DISCARDED: { label: 'Descartado', tone: 'neutral' },
++  },
++  handoff: {
++    EXPECTED: { label: 'Previsto', tone: 'neutral' },
++    CONFIRMED: { label: 'Confirmado', tone: 'info' },
++    COMPLETED: { label: 'Concluído', tone: 'success' },
++    DELAYED: { label: 'Atrasado', tone: 'warning' },
++    CANCELLED: { label: 'Cancelado', tone: 'neutral' },
++    DISPUTED: { label: 'Em contestação', tone: 'critical' },
++  },
++  responsibility: {
++    PROPOSED: { label: 'Proposta', tone: 'neutral' },
++    SENT: { label: 'Enviada', tone: 'info' },
++    VIEWED: { label: 'Vista', tone: 'info' },
++    ACCEPTED: { label: 'Aceita', tone: 'success' },
++    DECLINED: { label: 'Recusada', tone: 'critical' },
++    EXPIRED: { label: 'Expirada', tone: 'warning' },
++    CANCELLED: { label: 'Cancelada', tone: 'neutral' },
++    ACTIVE: { label: 'Em andamento', tone: 'info' },
++    COMPLETED: { label: 'Concluída', tone: 'success' },
++    FAILED: { label: 'Não realizada', tone: 'critical' },
++  },
++  calendarCategory: {
++    SCHOOL: { label: 'Escola', tone: 'info' },
++    HEALTH: { label: 'Saúde', tone: 'critical' },
++    SPORT: { label: 'Atividade', tone: 'success' },
++    FAMILY: { label: 'Família', tone: 'neutral' },
++    MEDICATION: { label: 'Medicação', tone: 'critical' },
++    DOCUMENT: { label: 'Documento', tone: 'neutral' },
++    FINANCE: { label: 'Financeiro', tone: 'warning' },
++    OTHER: { label: 'Outro', tone: 'neutral' },
++  },
++  notificationLevel: {
++    CRITICAL: { label: 'Urgente', tone: 'critical' },
++    IMPORTANT: { label: 'Importante', tone: 'warning' },
++    INFORMATIONAL: { label: 'Informativo', tone: 'info' },
++  },
++};
++
++/**
++ * Traduz um valor de enum para pt-BR. Se o valor não estiver no
++ * dicionário (schema evoluiu e a tradução ficou pra trás), cai para uma
++ * versão "title case" legível em vez de mostrar o `SCREAMING_CASE` cru —
++ * nunca falha silenciosamente mostrando algo pior que o valor original,
++ * mas também nunca expõe o enum técnico intacto.
++ */
++export function translateStatus(domain: StatusDomain, value: string): StatusEntry {
++  const entry = DICTIONARIES[domain]?.[value];
++  if (entry) return entry;
++  const humanized = value
++    .toLowerCase()
++    .split('_')
++    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
++    .join(' ');
++  return { label: humanized, tone: 'neutral' };
++}
+-- 
+2.43.0
+

@@ -1,0 +1,135 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 21 Aug 2026 11:30:57 +0000
+Subject: [PATCH 11/11] =?UTF-8?q?fix(zelii-p0):=20apps/web=20build=20was?=
+ =?UTF-8?q?=20failing=20=E2=80=94=20Plus=20Jakarta=20Sans=20via=20next/fon?=
+ =?UTF-8?q?t/google=20requires=20network=20access=20to=20fonts.googleapis.?=
+ =?UTF-8?q?com=20at=20build=20time,=20and=20this=20sandbox's=20own=20netwo?=
+ =?UTF-8?q?rk=20policy=20blocks=20it=20(confirmed:=20curl=20gets=20a=20403?=
+ =?UTF-8?q?=20on=20the=20CONNECT=20tunnel).=20Switched=20to=20@fontsource-?=
+ =?UTF-8?q?variable/plus-jakarta-sans=20(next/font/local=20under=20the=20h?=
+ =?UTF-8?q?ood,=20.woff2=20bundled=20in=20the=20npm=20package)=20=E2=80=94?=
+ =?UTF-8?q?=20build=20is=20now=20deterministic=20with=20zero=20external=20?=
+ =?UTF-8?q?network=20dependency,=20verified=20with=20a=20full=20local=20bu?=
+ =?UTF-8?q?ild=20(28/28=20routes=20prerendered),=20typecheck,=20lint=20and?=
+ =?UTF-8?q?=20the=20full=20test=20suite,=20all=20green=20in=20this=20same?=
+ =?UTF-8?q?=20sandbox.?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ apps/web/package.json       |  1 +
+ apps/web/src/app/layout.tsx | 40 ++++++++++++++++---------------------
+ pnpm-lock.yaml              |  8 ++++++++
+ 3 files changed, 26 insertions(+), 23 deletions(-)
+
+diff --git a/apps/web/package.json b/apps/web/package.json
+index b4b9322..3cd90fb 100644
+--- a/apps/web/package.json
++++ b/apps/web/package.json
+@@ -16,6 +16,7 @@
+     "@family-app/types": "workspace:*",
+     "@family-app/ui": "workspace:*",
+     "@family-app/validation": "workspace:*",
++    "@fontsource-variable/plus-jakarta-sans": "^5.3.0",
+     "@supabase/supabase-js": "^2.45.4",
+     "next": "14.2.15",
+     "react": "18.2.0",
+diff --git a/apps/web/src/app/layout.tsx b/apps/web/src/app/layout.tsx
+index 4e8dbdf..b73c645 100644
+--- a/apps/web/src/app/layout.tsx
++++ b/apps/web/src/app/layout.tsx
+@@ -1,31 +1,25 @@
+ import type { Metadata } from 'next';
+-import { Plus_Jakarta_Sans } from 'next/font/google';
++import '@fontsource-variable/plus-jakarta-sans';
+ import './globals.css';
+ 
+ /**
+- * Plus Jakarta Sans via next/font/google (§6.2) — self-hosted at build time
+- * by Next.js (no runtime request to Google Fonts, no layout-shift flash),
+- * with `display: 'swap'` so text never stays invisible while the font
+- * loads and a system-font fallback stack in globals.css/tailwind covers
+- * the (rare) case the font asset itself fails to load.
++ * Plus Jakarta Sans (§6.2) via @fontsource-variable — os arquivos .woff2
++ * são bundlados no pacote npm e servidos como asset estático do próprio
++ * build, sem nenhuma requisição de rede a fonts.googleapis.com/gstatic.com
++ * em build time nem em runtime.
+  *
+- * Verification note: this couldn't be build-tested end-to-end in the
+- * cloud sandbox that authored this change — its network policy blocks
+- * fonts.googleapis.com (same class of restriction already hit with
+- * container registries and direct Postgres this project cycle). Removing
+- * just this font import and rebuilding confirmed everything else (new
+- * tokens, Tailwind config, every route) compiles and prerenders cleanly —
+- * the Google Fonts fetch is the only untested step, and it runs on
+- * Vercel's own build infra (unrestricted network, and next/font/google is
+- * Vercel's own recommended integration), not this sandbox. Treat the
+- * first real `apps/web` deploy after this change as that step's actual
+- * test, same discipline as the Dockerfile fix earlier this project.
++ * Trocado de next/font/google para isto depois de reproduzir, neste mesmo
++ * sandbox, o build de `apps/web` falhando com NextFontError ao tentar
++ * buscar a fonte no Google Fonts — o sandbox bloqueia esse domínio
++ * especificamente (confirmado via curl: CONNECT tunnel 403), mas nada
++ * garante que builds locais dos devs, CI, ou redes corporativas com
++ * proxy restritivo não tenham a mesma classe de bloqueio; um build de
++ * produção não deveria depender de rede externa disponível no momento
++ * exato do build. Com next/font/local (que é o que este pacote usa por
++ * baixo) o build fica determinístico em qualquer ambiente, incluindo
++ * offline. `font-display: swap` já vem definido pelo próprio pacote.
+  */
+-const plusJakartaSans = Plus_Jakarta_Sans({
+-  subsets: ['latin'],
+-  variable: '--font-plus-jakarta-sans',
+-  display: 'swap',
+-});
++const FONT_FAMILY_VARIABLE = "'Plus Jakarta Sans Variable'";
+ 
+ export const metadata: Metadata = {
+   title: 'ZELII — O cuidado em sintonia',
+@@ -34,7 +28,7 @@ export const metadata: Metadata = {
+ 
+ export default function RootLayout({ children }: { children: React.ReactNode }) {
+   return (
+-    <html lang="pt-BR" className={plusJakartaSans.variable}>
++    <html lang="pt-BR" style={{ ['--font-plus-jakarta-sans' as string]: FONT_FAMILY_VARIABLE }}>
+       <body className="min-h-screen bg-bg font-sans text-ink antialiased">{children}</body>
+     </html>
+   );
+diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
+index 5ba6d14..4ca3001 100644
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -203,6 +203,9 @@ importers:
+       '@family-app/validation':
+         specifier: workspace:*
+         version: link:../../packages/validation
++      '@fontsource-variable/plus-jakarta-sans':
++        specifier: ^5.3.0
++        version: 5.3.0
+       '@supabase/supabase-js':
+         specifier: ^2.45.4
+         version: 2.112.3
+@@ -1598,6 +1601,9 @@ packages:
+     resolution: {integrity: sha512-4aQzz9vgxcNXFfo/iyNgDDYfsU5XGKKxWxZopw0cVotHiW+U8IJbIxMaxsINs6bHhtkG3StKNPcOrn3eBuxKPw==}
+     hasBin: true
+ 
++  '@fontsource-variable/plus-jakarta-sans@5.3.0':
++    resolution: {integrity: sha512-/l/4r0yyWK9JzAlmA0LiYgGgmJe/Gswt4jTJEzr5QhJfwMbvJZDmYWyW0M4X7yCK69BajMVlV/Lx8g7WDc1+sw==}
++
+   '@graphql-typed-document-node/core@3.2.0':
+     resolution: {integrity: sha512-mB9oAsNCm9aM3/SOv4YtBMqZbYj10R7dkq8byBqxGY/ncFwhf2oQzMV+LCRlWoDSEBJ3COiR1yeDvMtsoOsuFQ==}
+     peerDependencies:
+@@ -8027,6 +8033,8 @@ snapshots:
+       chalk: 4.1.2
+       js-yaml: 4.3.1
+ 
++  '@fontsource-variable/plus-jakarta-sans@5.3.0': {}
++
+   '@graphql-typed-document-node/core@3.2.0(graphql@15.8.0)':
+     dependencies:
+       graphql: 15.8.0
+-- 
+2.43.0
+

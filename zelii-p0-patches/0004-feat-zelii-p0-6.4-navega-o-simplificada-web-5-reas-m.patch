@@ -1,0 +1,412 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 21 Aug 2026 03:09:31 +0000
+Subject: [PATCH 04/11] =?UTF-8?q?feat(zelii-p0):=206.4=20=E2=80=94=20naveg?=
+ =?UTF-8?q?a=C3=A7=C3=A3o=20simplificada=20(web=205=20=C3=A1reas=20+=20mob?=
+ =?UTF-8?q?ile=205=20abas)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Nenhuma rota existente foi removida — só reagrupada/reordenada (regra
+explícita do prompt mestre: nada de remoção de funcionalidade).
+
+Web (apps/web/src/components/app-nav.tsx):
+- Os 13 itens antes soltos no nível raiz da sidebar agora vivem em 5
+  áreas com ícone (nav-icons.tsx, SVGs autorais simples, sem lib nova):
+  Hoje (Hoje, Caixa de Entrada), Família (Família, Filhos, Rede de
+  Cuidado), Agenda (Agenda, Tarefas, Solicitações), Saúde (Saúde,
+  Emergência, Documentos), Assistente (Pergunte à ZELII).
+- Agrupar Saúde/Emergência/Documentos sob um rótulo "Saúde" torna a
+  fronteira de dado protegido mais visível, não a esconde (§4).
+- Configurações + Sair continuam fora das 5 áreas, como chrome de
+  conta — mesmo lugar de antes.
+
+Mobile (apps/mobile/app/(tabs)/_layout.tsx e index.tsx):
+- Ícones reais via @expo/vector-icons/Ionicons (já vem empacotado com
+  o Expo — sem dependência nova) no lugar dos placeholders "●".
+- Aba Emergência (6ª aba, inconsistente com o próprio comentário do
+  arquivo que já dizia "5: Hoje, Filhos, Agenda, Assistente, Família")
+  sai da tab bar via `options={{ href: null }}` — a rota continua
+  navegável, só não tem mais botão fixo. Em troca, Hoje ganha um atalho
+  permanente "Emergência" no cabeçalho (Link para /emergency), sempre
+  visível, para a função não ficar mais difícil de achar.
+
+Todos os nomes de ícone do Ionicons usados foram conferidos contra o
+glyphmap instalado (sunny/happy/calendar/sparkles/people/alert-circle
+-outline — todos existem).
+
+Verificado: typecheck e lint de @family-app/web e @family-app/mobile
+limpos.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01NmTzhKuKEdztrGKZyeUHf4
+---
+ apps/mobile/app/(tabs)/_layout.tsx       |  46 ++++++--
+ apps/mobile/app/(tabs)/index.tsx         |  32 +++++-
+ apps/web/src/components/app-nav.tsx      | 134 ++++++++++++++++++-----
+ apps/web/src/components/ui/nav-icons.tsx |  81 ++++++++++++++
+ 4 files changed, 248 insertions(+), 45 deletions(-)
+ create mode 100644 apps/web/src/components/ui/nav-icons.tsx
+
+diff --git a/apps/mobile/app/(tabs)/_layout.tsx b/apps/mobile/app/(tabs)/_layout.tsx
+index 077fcd2..384e522 100644
+--- a/apps/mobile/app/(tabs)/_layout.tsx
++++ b/apps/mobile/app/(tabs)/_layout.tsx
+@@ -1,10 +1,19 @@
+ import { Tabs } from 'expo-router';
+-import { Text } from 'react-native';
++import { Ionicons } from '@expo/vector-icons';
+ import { colors } from '@family-app/ui';
+ 
+-/** Main navigation (§80): Hoje, Filhos, Agenda, Assistente, Família + FAB quick-add (§81) inside each screen. */
+-function TabIcon({ label, focused }: { label: string; focused: boolean }) {
+-  return <Text style={{ fontSize: 11, color: focused ? colors.primary : colors.inkMuted }}>{label}</Text>;
++/**
++ * Main navigation (§6.4/§80): 5 tabs — Hoje, Filhos, Agenda, Assistente,
++ * Família — ícones reais via @expo/vector-icons (já vem empacotado com
++ * o Expo, sem dependência nova). Emergência continua existindo como
++ * rota (screen `emergency`, ver `href: null` abaixo) mas sai da barra
++ * de abas visível — fica acessível por um atalho dentro de Hoje, não
++ * removida.
++ */
++type IoniconName = keyof typeof Ionicons.glyphMap;
++
++function TabIcon({ name, focused }: { name: IoniconName; focused: boolean }) {
++  return <Ionicons name={name} size={22} color={focused ? colors.primary : colors.inkMuted} />;
+ }
+ 
+ export default function TabsLayout() {
+@@ -13,15 +22,32 @@ export default function TabsLayout() {
+       screenOptions={{
+         headerShown: false,
+         tabBarActiveTintColor: colors.primary,
++        tabBarInactiveTintColor: colors.inkMuted,
+         tabBarStyle: { backgroundColor: colors.surface, borderTopColor: colors.border },
+       }}
+     >
+-      <Tabs.Screen name="index" options={{ title: 'Hoje', tabBarIcon: ({ focused }) => <TabIcon label="●" focused={focused} /> }} />
+-      <Tabs.Screen name="children" options={{ title: 'Filhos', tabBarIcon: ({ focused }) => <TabIcon label="●" focused={focused} /> }} />
+-      <Tabs.Screen name="calendar" options={{ title: 'Agenda', tabBarIcon: ({ focused }) => <TabIcon label="●" focused={focused} /> }} />
+-      <Tabs.Screen name="assistant" options={{ title: 'Assistente', tabBarIcon: ({ focused }) => <TabIcon label="●" focused={focused} /> }} />
+-      <Tabs.Screen name="family" options={{ title: 'Família', tabBarIcon: ({ focused }) => <TabIcon label="●" focused={focused} /> }} />
+-      <Tabs.Screen name="emergency" options={{ title: 'Emergência', tabBarIcon: ({ focused }) => <TabIcon label="●" focused={focused} /> }} />
++      <Tabs.Screen
++        name="index"
++        options={{ title: 'Hoje', tabBarIcon: ({ focused }) => <TabIcon name="sunny-outline" focused={focused} /> }}
++      />
++      <Tabs.Screen
++        name="children"
++        options={{ title: 'Filhos', tabBarIcon: ({ focused }) => <TabIcon name="happy-outline" focused={focused} /> }}
++      />
++      <Tabs.Screen
++        name="calendar"
++        options={{ title: 'Agenda', tabBarIcon: ({ focused }) => <TabIcon name="calendar-outline" focused={focused} /> }}
++      />
++      <Tabs.Screen
++        name="assistant"
++        options={{ title: 'Assistente', tabBarIcon: ({ focused }) => <TabIcon name="sparkles-outline" focused={focused} /> }}
++      />
++      <Tabs.Screen
++        name="family"
++        options={{ title: 'Família', tabBarIcon: ({ focused }) => <TabIcon name="people-outline" focused={focused} /> }}
++      />
++      {/* href: null — mantém a rota navegável (link a partir de Hoje), mas tira o botão da tab bar (§6.4: 5 abas). */}
++      <Tabs.Screen name="emergency" options={{ title: 'Emergência', href: null }} />
+     </Tabs>
+   );
+ }
+diff --git a/apps/mobile/app/(tabs)/index.tsx b/apps/mobile/app/(tabs)/index.tsx
+index 52cba5f..ac47acf 100644
+--- a/apps/mobile/app/(tabs)/index.tsx
++++ b/apps/mobile/app/(tabs)/index.tsx
+@@ -1,6 +1,7 @@
+ import { useCallback, useState } from 'react';
+ import { FlatList, RefreshControl, Text, View } from 'react-native';
+-import { useFocusEffect } from 'expo-router';
++import { Link, useFocusEffect } from 'expo-router';
++import { Ionicons } from '@expo/vector-icons';
+ import { apiFetch } from '@/lib/api-client';
+ import { colors, spacing } from '@family-app/ui';
+ 
+@@ -26,10 +27,31 @@ export default function HojeScreen() {
+ 
+   return (
+     <View style={{ flex: 1, backgroundColor: colors.bg, padding: spacing.lg }}>
+-      <Text style={{ fontSize: 24, fontWeight: '600', color: colors.ink }}>Hoje</Text>
+-      <Text style={{ color: colors.inkMuted, marginTop: spacing.xs }}>
+-        {new Intl.DateTimeFormat('pt-BR', { weekday: 'long', day: '2-digit', month: 'long' }).format(new Date())}
+-      </Text>
++      <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' }}>
++        <View>
++          <Text style={{ fontSize: 24, fontWeight: '600', color: colors.ink }}>Hoje</Text>
++          <Text style={{ color: colors.inkMuted, marginTop: spacing.xs }}>
++            {new Intl.DateTimeFormat('pt-BR', { weekday: 'long', day: '2-digit', month: 'long' }).format(new Date())}
++          </Text>
++        </View>
++        {/* Emergência não tem mais aba própria (§6.4) — este é o atalho que a substitui, sempre visível em Hoje. */}
++        <Link
++          href="/emergency"
++          accessibilityLabel="Emergência"
++          style={{
++            flexDirection: 'row',
++            alignItems: 'center',
++            gap: 4,
++            paddingVertical: 8,
++            paddingHorizontal: 12,
++            borderRadius: 999,
++            backgroundColor: colors.critical + '1A',
++          }}
++        >
++          <Ionicons name="alert-circle-outline" size={16} color={colors.critical} />
++          <Text style={{ color: colors.critical, fontSize: 13, fontWeight: '600' }}>Emergência</Text>
++        </Link>
++      </View>
+       <FlatList
+         style={{ marginTop: spacing.lg }}
+         data={people}
+diff --git a/apps/web/src/components/app-nav.tsx b/apps/web/src/components/app-nav.tsx
+index 49f3bc7..11867e1 100644
+--- a/apps/web/src/components/app-nav.tsx
++++ b/apps/web/src/components/app-nav.tsx
+@@ -3,21 +3,70 @@
+ import Link from 'next/link';
+ import { usePathname, useRouter } from 'next/navigation';
+ import { getSupabaseBrowserClient } from '@/lib/supabase-client';
++import { TodayIcon, FamilyIcon, AgendaIcon, HealthIcon, AssistantIcon, SettingsIcon } from '@/components/ui/nav-icons';
++import type { ComponentType, SVGProps } from 'react';
+ 
+-const links = [
+-  { href: '/app/today', label: 'Hoje' },
+-  { href: '/app/capture', label: 'Caixa de Entrada' },
+-  { href: '/app/family', label: 'Família' },
+-  { href: '/app/children', label: 'Filhos' },
+-  { href: '/app/calendar', label: 'Agenda' },
+-  { href: '/app/tasks', label: 'Tarefas' },
+-  { href: '/app/requests', label: 'Solicitações' },
+-  { href: '/app/care-network', label: 'Rede de Cuidado' },
+-  { href: '/app/health', label: 'Saúde' },
+-  { href: '/app/emergency', label: 'Emergência' },
+-  { href: '/app/documents', label: 'Documentos' },
+-  { href: '/app/ai', label: 'Assistente' },
+-  { href: '/app/settings', label: 'Configurações' },
++/**
++ * 5 áreas (§6.4) — nenhuma rota existente foi removida, só reagrupada.
++ * Cada área tem um destino principal (o primeiro item) e, quando
++ * relevante, sub-itens que antes eram entradas soltas no nível raiz:
++ *
++ * - Hoje: a central de decisões + o que chega pra revisar (Caixa de Entrada).
++ * - Família: quem cuida de quem — Família, Filhos, Rede de Cuidado.
++ * - Agenda: tudo com data/prazo — Agenda, Tarefas, Solicitações.
++ * - Saúde: dado sensível com proteção reforçada (§4) — Saúde, Emergência,
++ *   Documentos — agrupados para deixar essa fronteira visível, não pra
++ *   escondê-la.
++ * - Assistente: ZELII.
++ *
++ * Configurações fica fora das 5 áreas de conteúdo, junto com Sair, como
++ * chrome de conta — mesmo padrão que já existia antes desta reorganização.
++ */
++const areas: Array<{
++  label: string;
++  icon: ComponentType<SVGProps<SVGSVGElement>>;
++  items: Array<{ href: string; label: string }>;
++}> = [
++  {
++    label: 'Hoje',
++    icon: TodayIcon,
++    items: [
++      { href: '/app/today', label: 'Hoje' },
++      { href: '/app/capture', label: 'Caixa de Entrada' },
++    ],
++  },
++  {
++    label: 'Família',
++    icon: FamilyIcon,
++    items: [
++      { href: '/app/family', label: 'Família' },
++      { href: '/app/children', label: 'Filhos' },
++      { href: '/app/care-network', label: 'Rede de Cuidado' },
++    ],
++  },
++  {
++    label: 'Agenda',
++    icon: AgendaIcon,
++    items: [
++      { href: '/app/calendar', label: 'Agenda' },
++      { href: '/app/tasks', label: 'Tarefas' },
++      { href: '/app/requests', label: 'Solicitações' },
++    ],
++  },
++  {
++    label: 'Saúde',
++    icon: HealthIcon,
++    items: [
++      { href: '/app/health', label: 'Saúde' },
++      { href: '/app/emergency', label: 'Emergência' },
++      { href: '/app/documents', label: 'Documentos' },
++    ],
++  },
++  {
++    label: 'Assistente',
++    icon: AssistantIcon,
++    items: [{ href: '/app/ai', label: 'Pergunte à ZELII' }],
++  },
+ ];
+ 
+ export function AppNav() {
+@@ -30,24 +79,49 @@ export function AppNav() {
+   }
+ 
+   return (
+-    <aside className="flex w-56 flex-col border-r border-border bg-surface p-4">
++    <aside className="flex w-60 flex-col border-r border-border bg-surface p-4">
+       <span className="mb-6 px-2 text-lg font-semibold text-ink">ZELII</span>
+-      <nav className="flex flex-1 flex-col gap-1">
+-        {links.map((l) => (
+-          <Link
+-            key={l.href}
+-            href={l.href}
+-            className={`rounded-md px-3 py-2 text-sm ${
+-              pathname?.startsWith(l.href) ? 'bg-surfaceMuted font-medium text-ink' : 'text-inkMuted hover:bg-surfaceMuted'
+-            }`}
+-          >
+-            {l.label}
+-          </Link>
+-        ))}
++      <nav className="flex flex-1 flex-col gap-4 overflow-y-auto">
++        {areas.map((area) => {
++          const Icon = area.icon;
++          const areaActive = area.items.some((item) => pathname?.startsWith(item.href));
++          return (
++            <div key={area.label}>
++              <div className="mb-1 flex items-center gap-2 px-2 text-xs font-semibold uppercase tracking-wide text-inkMuted">
++                <Icon className={`h-4 w-4 ${areaActive ? 'text-primary' : ''}`} />
++                {area.label}
++              </div>
++              <div className="flex flex-col gap-0.5">
++                {area.items.map((item) => (
++                  <Link
++                    key={item.href}
++                    href={item.href}
++                    className={`rounded-md px-3 py-2 text-sm ${
++                      pathname?.startsWith(item.href) ? 'bg-surfaceMuted font-medium text-ink' : 'text-inkMuted hover:bg-surfaceMuted'
++                    }`}
++                  >
++                    {item.label}
++                  </Link>
++                ))}
++              </div>
++            </div>
++          );
++        })}
+       </nav>
+-      <button onClick={handleLogout} className="mt-4 rounded-md px-3 py-2 text-left text-sm text-inkMuted hover:bg-surfaceMuted">
+-        Sair
+-      </button>
++      <div className="mt-4 flex flex-col gap-0.5 border-t border-border pt-4">
++        <Link
++          href="/app/settings"
++          className={`flex items-center gap-2 rounded-md px-3 py-2 text-sm ${
++            pathname?.startsWith('/app/settings') ? 'bg-surfaceMuted font-medium text-ink' : 'text-inkMuted hover:bg-surfaceMuted'
++          }`}
++        >
++          <SettingsIcon className="h-4 w-4" />
++          Configurações
++        </Link>
++        <button onClick={handleLogout} className="rounded-md px-3 py-2 text-left text-sm text-inkMuted hover:bg-surfaceMuted">
++          Sair
++        </button>
++      </div>
+     </aside>
+   );
+ }
+diff --git a/apps/web/src/components/ui/nav-icons.tsx b/apps/web/src/components/ui/nav-icons.tsx
+new file mode 100644
+index 0000000..5b69a74
+--- /dev/null
++++ b/apps/web/src/components/ui/nav-icons.tsx
+@@ -0,0 +1,81 @@
++import type { SVGProps } from 'react';
++
++/**
++ * Ícones de linha para as 5 áreas da navegação (§6.4) — traçados
++ * autorais simples (não copiados de nenhum ícone set de terceiros),
++ * 20×20, `currentColor`, para herdar a cor do link ativo/inativo sem
++ * depender de instalar uma lib de ícones nova.
++ */
++type IconProps = SVGProps<SVGSVGElement>;
++
++const base = {
++  viewBox: '0 0 20 20',
++  fill: 'none',
++  stroke: 'currentColor',
++  strokeWidth: 1.6,
++  strokeLinecap: 'round' as const,
++  strokeLinejoin: 'round' as const,
++  'aria-hidden': true,
++};
++
++/** Hoje — sol, o dia em curso. */
++export function TodayIcon(props: IconProps) {
++  return (
++    <svg {...base} {...props}>
++      <circle cx="10" cy="10" r="3.5" />
++      <path d="M10 2.5v2M10 15.5v2M2.5 10h2M15.5 10h2M4.6 4.6l1.4 1.4M14 14l1.4 1.4M4.6 15.4L6 14M14 6l1.4-1.4" />
++    </svg>
++  );
++}
++
++/** Família — duas pessoas, o círculo de cuidado. */
++export function FamilyIcon(props: IconProps) {
++  return (
++    <svg {...base} {...props}>
++      <circle cx="7.3" cy="6.5" r="2.3" />
++      <path d="M2.8 16c.4-2.8 2.2-4.3 4.5-4.3s4.1 1.5 4.5 4.3" />
++      <circle cx="14.2" cy="7.3" r="1.9" />
++      <path d="M13 11.9c1.9.1 3.3 1.4 3.7 3.6" />
++    </svg>
++  );
++}
++
++/** Agenda — calendário com marcações. */
++export function AgendaIcon(props: IconProps) {
++  return (
++    <svg {...base} {...props}>
++      <rect x="2.8" y="4" width="14.4" height="13" rx="2" />
++      <path d="M2.8 8h14.4M6.5 2.5v3M13.5 2.5v3" />
++      <path d="M6 11.5h2M10 11.5h2M6 14h2" />
++    </svg>
++  );
++}
++
++/** Saúde — cruz dentro de um escudo, dado protegido. */
++export function HealthIcon(props: IconProps) {
++  return (
++    <svg {...base} {...props}>
++      <path d="M10 2.5 16.5 5v5c0 4-2.8 6.7-6.5 7.5C6.3 16.7 3.5 14 3.5 10V5L10 2.5Z" />
++      <path d="M10 7.2v5.6M7.2 10h5.6" />
++    </svg>
++  );
++}
++
++/** Assistente — brilho/faísca da ZELII. */
++export function AssistantIcon(props: IconProps) {
++  return (
++    <svg {...base} {...props}>
++      <path d="M10 2.5 11.4 8 17 10 11.4 12 10 17.5 8.6 12 3 10 8.6 8Z" />
++    </svg>
++  );
++}
++
++/** Configurações — engrenagem simplificada. */
++export function SettingsIcon(props: IconProps) {
++  return (
++    <svg {...base} {...props}>
++      <circle cx="10" cy="10" r="2.6" />
++      <path d="M10 3v2M10 15v2M3 10h2M15 10h2M5.1 5.1l1.4 1.4M13.5 13.5l1.4 1.4M5.1 14.9l1.4-1.4M13.5 6.5l1.4-1.4" />
++    </svg>
++  );
++}
+-- 
+2.43.0
+

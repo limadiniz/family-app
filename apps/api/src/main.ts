@@ -1,13 +1,20 @@
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
-import { loadServerEnv } from '@family-app/config';
+import { loadEnvFile, loadServerEnv } from '@family-app/config';
 import { createLogger } from '@family-app/observability';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/http-exception.filter';
 import { CorrelationIdMiddleware } from './common/correlation-id.middleware';
 
 async function bootstrap() {
+  // `nest start` does not auto-load .env* files (unlike Next.js) — without
+  // this, apps/api/.env.local is silently ignored, loadServerEnv() below
+  // fails on the required SUPABASE_* vars, and the whole process exits
+  // before it ever binds API_PORT. From the browser that shows up as
+  // "Failed to fetch" on any apiFetch() call (e.g. /onboarding/bootstrap
+  // during cadastro) — connection refused, not a real CORS/network issue.
+  loadEnvFile();
   const env = loadServerEnv();
   const logger = createLogger({ name: 'api', level: env.LOG_LEVEL });
 

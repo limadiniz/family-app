@@ -1,0 +1,324 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 21 Aug 2026 02:52:55 +0000
+Subject: [PATCH 01/11] =?UTF-8?q?feat(zelii-p0):=206.1=20=E2=80=94=20aplic?=
+ =?UTF-8?q?ar=20marca=20ZELII=20nos=20textos=20vis=C3=ADveis?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- site público, nav web/mobile, título/metadata, tela de IA, app.json (nome)
+- system prompt da IA e nota de sugestão agora falam como 'ZELII'
+- RoadmapPage: removida linguagem interna de fase ('Fase N') das 4 telas
+  que ainda a expunham (saúde, agenda, documentos, configurações) —
+  trocado por texto 'em breve' voltado ao usuário
+- nada de pacotes/tabelas/bundle id renomeados nesta etapa (só o display
+  name do app mobile, que é cosmético/reversível)
+
+lint + typecheck limpos em web/mobile/api.
+---
+ apps/api/src/modules/ai/ai.service.ts    |  4 ++--
+ apps/mobile/app.json                     |  2 +-
+ apps/mobile/app/(tabs)/assistant.tsx     |  6 +++---
+ apps/mobile/app/(tabs)/calendar.tsx      |  2 +-
+ apps/web/src/app/app/ai/page.tsx         |  4 ++--
+ apps/web/src/app/app/calendar/page.tsx   |  3 +--
+ apps/web/src/app/app/documents/page.tsx  |  3 +--
+ apps/web/src/app/app/health/page.tsx     |  3 +--
+ apps/web/src/app/app/settings/page.tsx   |  3 +--
+ apps/web/src/app/como-funciona/page.tsx  |  2 +-
+ apps/web/src/app/familias/page.tsx       |  2 +-
+ apps/web/src/app/layout.tsx              |  4 ++--
+ apps/web/src/app/precos/page.tsx         |  4 ++--
+ apps/web/src/app/privacidade/page.tsx    |  2 +-
+ apps/web/src/app/produto/page.tsx        |  4 ++--
+ apps/web/src/components/app-nav.tsx      |  2 +-
+ apps/web/src/components/roadmap-page.tsx | 10 ++++++++--
+ apps/web/src/components/site-nav.tsx     |  2 +-
+ 18 files changed, 32 insertions(+), 30 deletions(-)
+
+diff --git a/apps/api/src/modules/ai/ai.service.ts b/apps/api/src/modules/ai/ai.service.ts
+index 431fc40..bc0e020 100644
+--- a/apps/api/src/modules/ai/ai.service.ts
++++ b/apps/api/src/modules/ai/ai.service.ts
+@@ -212,7 +212,7 @@ export class AiService {
+           model,
+           max_tokens: 512,
+           system:
+-            'Você é o Family Copilot. Responda SOMENTE com base nos fatos fornecidos abaixo. ' +
++            'Você é a ZELII. Responda SOMENTE com base nos fatos fornecidos abaixo. ' +
+             'Nunca invente informação, nunca altere dose de medicamento, nunca diagnostique como fato. ' +
+             'Se os fatos não bastarem para responder, diga isso claramente.',
+           messages: [
+@@ -265,7 +265,7 @@ export class AiService {
+       payload: {
+         subjectPersonId: subjectPersonIds[0],
+         responsibilityType: 'PICKUP',
+-        note: 'Sugestão do Family Copilot — confirme o cuidador antes de enviar.',
++        note: 'Sugestão da ZELII — confirme o cuidador antes de enviar.',
+       },
+     };
+   }
+diff --git a/apps/mobile/app.json b/apps/mobile/app.json
+index b2e0c4e..e15cdae 100644
+--- a/apps/mobile/app.json
++++ b/apps/mobile/app.json
+@@ -1,6 +1,6 @@
+ {
+   "expo": {
+-    "name": "Family App",
++    "name": "ZELII",
+     "slug": "family-app",
+     "scheme": "familyapp",
+     "version": "0.1.0",
+diff --git a/apps/mobile/app/(tabs)/assistant.tsx b/apps/mobile/app/(tabs)/assistant.tsx
+index faefeff..578880a 100644
+--- a/apps/mobile/app/(tabs)/assistant.tsx
++++ b/apps/mobile/app/(tabs)/assistant.tsx
+@@ -4,10 +4,10 @@ import { colors, spacing } from '@family-app/ui';
+ export default function AssistenteScreen() {
+   return (
+     <View style={{ flex: 1, backgroundColor: colors.bg, padding: spacing.lg }}>
+-      <Text style={{ fontSize: 24, fontWeight: '600', color: colors.ink }}>Family Copilot</Text>
++      <Text style={{ fontSize: 24, fontWeight: '600', color: colors.ink }}>Pergunte à ZELII</Text>
+       <Text style={{ marginTop: spacing.md, color: colors.inkMuted }}>
+-        Chega na Fase 6 (AI). O AI Gateway já garante, desde agora, que nenhuma pergunta chega ao modelo de
+-        linguagem sem passar pelo Family Policy Engine.
++        Em breve por aqui. Nenhuma pergunta chega até a ZELII sem passar antes pela mesma checagem de permissão
++        que protege o resto do app.
+       </Text>
+     </View>
+   );
+diff --git a/apps/mobile/app/(tabs)/calendar.tsx b/apps/mobile/app/(tabs)/calendar.tsx
+index a90d7a9..5ab9aed 100644
+--- a/apps/mobile/app/(tabs)/calendar.tsx
++++ b/apps/mobile/app/(tabs)/calendar.tsx
+@@ -6,7 +6,7 @@ export default function AgendaScreen() {
+     <View style={{ flex: 1, backgroundColor: colors.bg, padding: spacing.lg }}>
+       <Text style={{ fontSize: 24, fontWeight: '600', color: colors.ink }}>Agenda</Text>
+       <Text style={{ marginTop: spacing.md, color: colors.inkMuted }}>
+-        Chega na Fase 2 (Daily Life) — visualização diária/semanal por filho, cuidador e residência.
++        Em breve por aqui: visualização diária e semanal por pessoa, cuidador e residência.
+       </Text>
+     </View>
+   );
+diff --git a/apps/web/src/app/app/ai/page.tsx b/apps/web/src/app/app/ai/page.tsx
+index e6a3278..cbfe51e 100644
+--- a/apps/web/src/app/app/ai/page.tsx
++++ b/apps/web/src/app/app/ai/page.tsx
+@@ -75,7 +75,7 @@ export default function AiPage() {
+     <div className="max-w-2xl">
+       <div className="flex items-center justify-between">
+         <div>
+-          <h1 className="text-2xl font-semibold text-ink">Family Copilot</h1>
++          <h1 className="text-2xl font-semibold text-ink">Pergunte à ZELII</h1>
+           <p className="mt-1 text-sm text-inkMuted">Pergunte sobre a agenda, saúde ou escola — só o que você tem autorização para ver.</p>
+         </div>
+         {people && people.length > 1 && (
+@@ -127,7 +127,7 @@ export default function AiPage() {
+         <input
+           value={question}
+           onChange={(e) => setQuestion(e.target.value)}
+-          placeholder="Pergunte ao Family Copilot..."
++          placeholder="Pergunte à ZELII..."
+           className="flex-1 rounded-md border border-border bg-surface px-3 py-2 text-sm text-ink"
+           disabled={loading || !selectedPersonId}
+         />
+diff --git a/apps/web/src/app/app/calendar/page.tsx b/apps/web/src/app/app/calendar/page.tsx
+index a2ebb48..938f363 100644
+--- a/apps/web/src/app/app/calendar/page.tsx
++++ b/apps/web/src/app/app/calendar/page.tsx
+@@ -4,8 +4,7 @@ export default function CalendarPage() {
+   return (
+     <RoadmapPage
+       title="Agenda"
+-      phase="Fase 2 — Daily Life"
+-      description="Visualização diária/semanal/mensal por filho, cuidador, residência e categoria. O schema (CalendarEvent) já existe em packages/domain; esta tela passa a consumir a API assim que os endpoints de agenda forem implementados."
++      description="Visualização diária, semanal e mensal por pessoa, cuidador e residência. Em breve por aqui."
+     />
+   );
+ }
+diff --git a/apps/web/src/app/app/documents/page.tsx b/apps/web/src/app/app/documents/page.tsx
+index ff822ea..1ea65f0 100644
+--- a/apps/web/src/app/app/documents/page.tsx
++++ b/apps/web/src/app/app/documents/page.tsx
+@@ -4,8 +4,7 @@ export default function DocumentsPage() {
+   return (
+     <RoadmapPage
+       title="Documentos"
+-      phase="Fase 4 — Health / Fase 5 — School"
+-      description="Upload seguro com storage privado, URLs assinadas e pipeline de OCR com confirmação humana antes de qualquer dado extraído virar verdade no sistema."
++      description="Upload seguro, com verificação antes de qualquer informação extraída virar parte do perfil da família. Em breve por aqui."
+     />
+   );
+ }
+diff --git a/apps/web/src/app/app/health/page.tsx b/apps/web/src/app/app/health/page.tsx
+index ca26999..039d280 100644
+--- a/apps/web/src/app/app/health/page.tsx
++++ b/apps/web/src/app/app/health/page.tsx
+@@ -4,8 +4,7 @@ export default function HealthPage() {
+   return (
+     <RoadmapPage
+       title="Saúde"
+-      phase="Fase 4 — Health"
+-      description="Perfil de saúde, consultas, medicamentos, prescrições e vacinação, com políticas de acesso próprias e proteção reforçada de dados sensíveis."
++      description="Perfil de saúde, consultas, medicamentos, prescrições e vacinas — com proteção extra para esses dados. Em breve por aqui."
+     />
+   );
+ }
+diff --git a/apps/web/src/app/app/settings/page.tsx b/apps/web/src/app/app/settings/page.tsx
+index 8026047..410b8a7 100644
+--- a/apps/web/src/app/app/settings/page.tsx
++++ b/apps/web/src/app/app/settings/page.tsx
+@@ -4,8 +4,7 @@ export default function SettingsPage() {
+   return (
+     <RoadmapPage
+       title="Configurações"
+-      phase="Contínuo"
+-      description="Preferências de notificação, dispositivos, exportação de dados e exclusão de conta chegam junto dos módulos correspondentes (Fase 2 e Fase 7)."
++      description="Preferências de notificação, dispositivos, exportação de dados e exclusão de conta chegam em breve."
+     />
+   );
+ }
+diff --git a/apps/web/src/app/como-funciona/page.tsx b/apps/web/src/app/como-funciona/page.tsx
+index 921c796..4e9ce03 100644
+--- a/apps/web/src/app/como-funciona/page.tsx
++++ b/apps/web/src/app/como-funciona/page.tsx
+@@ -4,7 +4,7 @@ export default function ComoFuncionaPage() {
+   return (
+     <MarketingPage title="Como funciona">
+       <p>
+-        Toda informação que entra no Family App passa pelo mesmo ciclo: <strong>Capturar → Entender → Coordenar →
++        Toda informação que entra na ZELII passa pelo mesmo ciclo: <strong>Capturar → Entender → Coordenar →
+         Agir</strong>. É esse ciclo — não mais uma lista de funcionalidades — que faz o produto realmente coordenar
+         quem cuida de quem.
+       </p>
+diff --git a/apps/web/src/app/familias/page.tsx b/apps/web/src/app/familias/page.tsx
+index 3642b7e..3fe610e 100644
+--- a/apps/web/src/app/familias/page.tsx
++++ b/apps/web/src/app/familias/page.tsx
+@@ -5,7 +5,7 @@ export default function FamiliasPage() {
+     <MarketingPage title="Feito para famílias reais">
+       <p>
+         Pais casados, pais separados, guarda compartilhada, guarda unilateral, famílias recompostas, avós
+-        cuidadores, babás e cuidadores temporários — o Family App foi desenhado desde o início para múltiplas
++        cuidadores, babás e cuidadores temporários — a ZELII foi desenhada desde o início para múltiplas
+         residências e múltiplos responsáveis, não apenas para o modelo &quot;pai + mãe + filhos&quot;.
+       </p>
+       <h2>Múltiplas residências</h2>
+diff --git a/apps/web/src/app/layout.tsx b/apps/web/src/app/layout.tsx
+index d287814..73da4bf 100644
+--- a/apps/web/src/app/layout.tsx
++++ b/apps/web/src/app/layout.tsx
+@@ -2,8 +2,8 @@ import type { Metadata } from 'next';
+ import './globals.css';
+ 
+ export const metadata: Metadata = {
+-  title: 'Family App — Você não precisa lembrar de tudo',
+-  description: 'A plataforma que organiza a vida da sua família: agenda, escola, saúde e cuidado, em um só lugar.',
++  title: 'ZELII — O cuidado em sintonia',
++  description: 'ZELII organiza o cuidado entre todos que fazem parte da rotina da família: agenda, escola, saúde e cuidado, em um só lugar.',
+ };
+ 
+ export default function RootLayout({ children }: { children: React.ReactNode }) {
+diff --git a/apps/web/src/app/precos/page.tsx b/apps/web/src/app/precos/page.tsx
+index b5b9ce1..a42c6c8 100644
+--- a/apps/web/src/app/precos/page.tsx
++++ b/apps/web/src/app/precos/page.tsx
+@@ -4,8 +4,8 @@ export default function PrecosPage() {
+   return (
+     <MarketingPage title="Preços">
+       <p>
+-        O Family App está em desenvolvimento (fase de fundação técnica). A estrutura de preços será definida antes
+-        do lançamento público — esta página é um placeholder reversível, não uma decisão comercial final.
++        A ZELII está em desenvolvimento. A estrutura de preços será definida antes do lançamento público — o que
++        você vê aqui ainda não é uma decisão comercial final.
+       </p>
+     </MarketingPage>
+   );
+diff --git a/apps/web/src/app/privacidade/page.tsx b/apps/web/src/app/privacidade/page.tsx
+index ca22683..cec1262 100644
+--- a/apps/web/src/app/privacidade/page.tsx
++++ b/apps/web/src/app/privacidade/page.tsx
+@@ -4,7 +4,7 @@ export default function PrivacidadePage() {
+   return (
+     <MarketingPage title="Privacidade">
+       <p>
+-        O Family App é desenvolvido com privacidade desde a concepção (Privacy by Design) e privacidade como
++        A ZELII é desenvolvida com privacidade desde a concepção (Privacy by Design) e privacidade como
+         padrão (Privacy by Default), considerando a LGPD e o tratamento de dados de crianças e adolescentes.
+       </p>
+       <h2>Minimização</h2>
+diff --git a/apps/web/src/app/produto/page.tsx b/apps/web/src/app/produto/page.tsx
+index 6075d04..150942b 100644
+--- a/apps/web/src/app/produto/page.tsx
++++ b/apps/web/src/app/produto/page.tsx
+@@ -4,7 +4,7 @@ export default function ProdutoPage() {
+   return (
+     <MarketingPage title="Um sistema operacional para a sua família">
+       <p>
+-        O Family App centraliza tudo que envolve o cuidado das pessoas da sua família: agenda, escola, saúde,
++        A ZELII centraliza tudo que envolve o cuidado das pessoas da sua família: agenda, escola, saúde,
+         medicamentos, atividades, transporte, documentos e a rede de cuidadores — pais, avós, babás e
+         profissionais.
+       </p>
+@@ -15,7 +15,7 @@ export default function ProdutoPage() {
+         Cada criança está no centro de uma rede: responsáveis, cuidadores, escola, médicos e atividades — com
+         permissões específicas para cada pessoa, nunca um acesso genérico de &quot;família&quot;.
+       </p>
+-      <h2>Family Copilot</h2>
++      <h2>ZELII</h2>
+       <p>
+         Um assistente que responde perguntas como &quot;quando o Pedro tem consulta?&quot; usando exatamente os
+         dados que você tem permissão para ver — nunca mais, nunca menos.
+diff --git a/apps/web/src/components/app-nav.tsx b/apps/web/src/components/app-nav.tsx
+index de35ee3..49f3bc7 100644
+--- a/apps/web/src/components/app-nav.tsx
++++ b/apps/web/src/components/app-nav.tsx
+@@ -31,7 +31,7 @@ export function AppNav() {
+ 
+   return (
+     <aside className="flex w-56 flex-col border-r border-border bg-surface p-4">
+-      <span className="mb-6 px-2 text-lg font-semibold text-ink">Family App</span>
++      <span className="mb-6 px-2 text-lg font-semibold text-ink">ZELII</span>
+       <nav className="flex flex-1 flex-col gap-1">
+         {links.map((l) => (
+           <Link
+diff --git a/apps/web/src/components/roadmap-page.tsx b/apps/web/src/components/roadmap-page.tsx
+index 6950a65..ba703c0 100644
+--- a/apps/web/src/components/roadmap-page.tsx
++++ b/apps/web/src/components/roadmap-page.tsx
+@@ -1,9 +1,15 @@
+-export function RoadmapPage({ title, phase, description }: { title: string; phase: string; description: string }) {
++/**
++ * Tela de "ainda não chegou aqui" para uma área do produto sem UI própria
++ * ainda. `status` é linguagem voltada ao usuário (nunca um rótulo interno
++ * de fase/sprint) — ver ZELII P0 §6.1: nada de "Fase N" na experiência de
++ * produção, mesmo em telas de espera.
++ */
++export function RoadmapPage({ title, status = 'Em construção', description }: { title: string; status?: string; description: string }) {
+   return (
+     <div className="max-w-2xl">
+       <h1 className="text-2xl font-semibold text-ink">{title}</h1>
+       <div className="mt-6 rounded-lg border border-dashed border-border bg-surface p-6">
+-        <p className="text-sm font-medium text-primary">{phase}</p>
++        <p className="text-sm font-medium text-primary">{status}</p>
+         <p className="mt-2 text-sm text-inkMuted">{description}</p>
+       </div>
+     </div>
+diff --git a/apps/web/src/components/site-nav.tsx b/apps/web/src/components/site-nav.tsx
+index 9009bb1..b5bfb07 100644
+--- a/apps/web/src/components/site-nav.tsx
++++ b/apps/web/src/components/site-nav.tsx
+@@ -15,7 +15,7 @@ export function SiteNav() {
+     <header className="border-b border-border bg-surface/80 backdrop-blur">
+       <nav className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
+         <Link href="/" className="text-lg font-semibold text-ink">
+-          Family App
++          ZELII
+         </Link>
+         <div className="hidden gap-6 md:flex">
+           {links.map((l) => (
+-- 
+2.43.0
+
