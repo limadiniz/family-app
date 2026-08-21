@@ -1,13 +1,13 @@
 {
   "expo": {
-    "name": "Family App",
+    "name": "ZELII",
     "slug": "family-app",
     "scheme": "familyapp",
     "version": "0.1.0",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "splash": {
-      "backgroundColor": "#FBF9F6"
+      "backgroundColor": "#FFF8F1"
     },
     "ios": {
       "supportsTablet": true,

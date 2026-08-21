@@ -2,6 +2,7 @@ import Link from 'next/link';
 
 const links = [
   { href: '/produto', label: 'Produto' },
+  { href: '/como-funciona', label: 'Como funciona' },
   { href: '/familias', label: 'Famílias' },
   { href: '/seguranca', label: 'Segurança' },
   { href: '/privacidade', label: 'Privacidade' },
@@ -14,7 +15,7 @@ export function SiteNav() {
     <header className="border-b border-border bg-surface/80 backdrop-blur">
       <nav className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
         <Link href="/" className="text-lg font-semibold text-ink">
-          Family App
+          ZELII
         </Link>
         <div className="hidden gap-6 md:flex">
           {links.map((l) => (

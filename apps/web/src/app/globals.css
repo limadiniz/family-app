@@ -2,12 +2,27 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ZELII P0 §6.2 — creme + ameixa (ver packages/ui/src/tokens.ts para a
+   paleta completa e as notas de contraste WCAG). Valores mantidos em
+   sincronia manual com os tokens porque este arquivo carrega antes de
+   qualquer classe Tailwind resolver, evitando um flash da paleta antiga
+   no primeiro paint. */
 html,
 body {
-  background-color: #fbf9f6;
-  color: #231f1b;
+  background-color: #fff8f1;
+  color: #4b3346;
 }
 
 * {
-  border-color: #e7e1d6;
+  border-color: #e4d8cf;
+}
+
+/* Foco visível em todo elemento interativo (§6.2) — nunca apenas a cor,
+   sempre um anel com espaçamento suficiente para ser percebido também por
+   quem usa alto contraste ou daltonismo. Sobrescreve o outline default do
+   navegador em vez de removê-lo. */
+:focus-visible {
+  outline: 2px solid #d95d4f;
+  outline-offset: 2px;
+  border-radius: 4px;
 }

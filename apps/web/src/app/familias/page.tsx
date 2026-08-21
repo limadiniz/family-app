@@ -5,7 +5,7 @@ export default function FamiliasPage() {
     <MarketingPage title="Feito para famílias reais">
       <p>
         Pais casados, pais separados, guarda compartilhada, guarda unilateral, famílias recompostas, avós
-        cuidadores, babás e cuidadores temporários — o Family App foi desenhado desde o início para múltiplas
+        cuidadores, babás e cuidadores temporários — a ZELII foi desenhada desde o início para múltiplas
         residências e múltiplos responsáveis, não apenas para o modelo &quot;pai + mãe + filhos&quot;.
       </p>
       <h2>Múltiplas residências</h2>

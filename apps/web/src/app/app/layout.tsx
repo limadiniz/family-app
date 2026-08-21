@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { getSupabaseBrowserClient } from '@/lib/supabase-client';
 import { AppNav } from '@/components/app-nav';
+import { FamilyGate } from '@/components/family-gate';
 
 /**
  * Auth-gated shell for the whole /app area (§79). Client-rendered check
@@ -33,9 +34,11 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="flex min-h-screen">
-      <AppNav />
-      <main className="flex-1 p-8">{children}</main>
-    </div>
+    <FamilyGate>
+      <div className="flex min-h-screen">
+        <AppNav />
+        <main className="flex-1 p-8">{children}</main>
+      </div>
+    </FamilyGate>
   );
 }

@@ -4,10 +4,10 @@ import { colors, spacing } from '@family-app/ui';
 export default function AssistenteScreen() {
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg, padding: spacing.lg }}>
-      <Text style={{ fontSize: 24, fontWeight: '600', color: colors.ink }}>Family Copilot</Text>
+      <Text style={{ fontSize: 24, fontWeight: '600', color: colors.ink }}>Pergunte à ZELII</Text>
       <Text style={{ marginTop: spacing.md, color: colors.inkMuted }}>
-        Chega na Fase 6 (AI). O AI Gateway já garante, desde agora, que nenhuma pergunta chega ao modelo de
-        linguagem sem passar pelo Family Policy Engine.
+        Em breve por aqui. Nenhuma pergunta chega até a ZELII sem passar antes pela mesma checagem de permissão
+        que protege o resto do app.
       </Text>
     </View>
   );

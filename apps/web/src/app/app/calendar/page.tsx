@@ -4,8 +4,7 @@ export default function CalendarPage() {
   return (
     <RoadmapPage
       title="Agenda"
-      phase="Fase 2 — Daily Life"
-      description="Visualização diária/semanal/mensal por filho, cuidador, residência e categoria. O schema (CalendarEvent) já existe em packages/domain; esta tela passa a consumir a API assim que os endpoints de agenda forem implementados."
+      description="Visualização diária, semanal e mensal por pessoa, cuidador e residência. Em breve por aqui."
     />
   );
 }

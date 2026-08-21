@@ -22,6 +22,19 @@ const config: Config = {
         sm: `${radius.sm}px`,
         md: `${radius.md}px`,
         lg: `${radius.lg}px`,
+        xl: `${radius.xl}px`,
+      },
+      fontFamily: {
+        // Plus Jakarta Sans loaded via next/font/google in layout.tsx sets
+        // this CSS variable; the same system-font fallback stack as
+        // packages/ui's typography token covers a failed font load.
+        sans: ['var(--font-plus-jakarta-sans)', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'sans-serif'],
+      },
+      minHeight: {
+        touch: '44px',
+      },
+      minWidth: {
+        touch: '44px',
       },
     },
   },

@@ -60,12 +60,19 @@ export class RequestsService {
       throw new BadRequestException('Não é possível criar uma solicitação para si mesmo.');
     }
     const db = this.db(actor);
-    const { data, error } = await db
+
+    // A linha nasce DRAFT, nunca SENT direto: a policy de INSERT em
+    // requests (migration 20260820000020) exige `status = 'DRAFT'` — o
+    // caminho real de criação é sempre DRAFT->SENT por um UPDATE
+    // separado, validado pelo trigger app.validate_request_transition()
+    // e pelo mesmo canTransitionRequest que o resto deste service usa.
+    // Inserir já como 'SENT' viola essa policy e a criação inteira falha.
+    const { data: draft, error: insertError } = await db
       .from('requests')
       .insert({
         tenant_id: actor.tenantId,
         type: input.type,
-        status: 'SENT',
+        status: 'DRAFT',
         requested_by_person_id: actor.personId,
         requested_to_person_id: input.requestedToPersonId,
         subject_person_id: input.subjectPersonId ?? null,
@@ -77,9 +84,14 @@ export class RequestsService {
       })
       .select()
       .single();
+    if (insertError) throw new BadRequestException(insertError.message);
+
+    await this.logAction(actor, draft.id as string, 'CREATED');
+
+    this.assertTransition('DRAFT', 'SENT');
+    const { data, error } = await db.from('requests').update({ status: 'SENT' }).eq('id', draft.id as string).select().single();
     if (error) throw new BadRequestException(error.message);
 
-    await this.logAction(actor, data.id as string, 'CREATED');
     await this.logAction(actor, data.id as string, 'SENT');
 
     await this.audit.record(actor, {
@@ -224,10 +236,22 @@ export class RequestsService {
     if (relatedType !== 'calendar_events') return;
 
     const column = type === 'RESPONSIBILITY_TRANSFER' ? 'responsible_person_id' : 'transportation_person_id';
-    const { error } = await this.db(actor)
+    // calendar_events_access (migration 20260820000023) já exige
+    // app.has_domain_access(..., 'EDIT') no WITH CHECK — mas um UPDATE
+    // cujo WHERE não bate com nenhuma linha visível pela RLS não é um
+    // erro do Postgres, é 0 linhas afetadas em silêncio. Sem checar
+    // isso, quem aceita uma solicitação sem EDIT sobre o evento via um
+    // "sucesso" e um REQUEST_ACCEPTED auditado, mas o efeito real nunca
+    // aconteceu — pior que um 403 alto e claro (§10).
+    const { data, error } = await this.db(actor)
       .from('calendar_events')
       .update({ [column]: request.requested_to_person_id })
-      .eq('id', relatedId);
+      .eq('id', relatedId)
+      .select('id')
+      .maybeSingle();
     if (error) throw new BadRequestException(error.message);
+    if (!data) {
+      throw new ForbiddenException('Você não tem permissão para aplicar o efeito desta solicitação a este evento.');
+    }
   }
 }

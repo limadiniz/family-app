@@ -4,7 +4,7 @@ export default function PrivacidadePage() {
   return (
     <MarketingPage title="Privacidade">
       <p>
-        O Family App é desenvolvido com privacidade desde a concepção (Privacy by Design) e privacidade como
+        A ZELII é desenvolvida com privacidade desde a concepção (Privacy by Design) e privacidade como
         padrão (Privacy by Default), considerando a LGPD e o tratamento de dados de crianças e adolescentes.
       </p>
       <h2>Minimização</h2>
