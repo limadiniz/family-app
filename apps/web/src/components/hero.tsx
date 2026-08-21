@@ -1,6 +1,7 @@
 import Image from 'next/image';
 import Link from 'next/link';
 import heroImage from '../../public/images/zelii-hero-family-care.png';
+import heroImageBg from '../../public/images/zelii-hero-family-bg.png';
 
 /**
  * Hero da homepage — v2 (composição integrada).
@@ -25,14 +26,31 @@ import heroImage from '../../public/images/zelii-hero-family-care.png';
  * vazio novo somado a ele. Resultado: personagens visivelmente maiores,
  * sem sobreposição com o texto, sem vazio duplicado no centro.
  *
- * Abaixo de `lg`, o mesmo elemento de imagem simplesmente volta ao fluxo
- * normal do documento — CSS responsivo troca a posição do container
- * (`relative` → `lg:absolute`), não a imagem em si — depois do texto, na
- * ordem de leitura pedida pro mobile/tablet retrato (título → descrição →
- * assinatura → CTAs → ilustração). `z-10` no texto garante que ele sempre
- * fique visualmente por cima da imagem em `lg`, independente da ordem no
- * DOM (que continua texto-antes-de-imagem, correta pra teclado/leitor de
- * tela nos dois casos).
+ * Abaixo de `lg`, a imagem NÃO fica mais em fluxo normal depois do texto
+ * (isso era a v2 original) — vira fundo: uma segunda `<Image>`, um RECORTE
+ * separado (`zelii-hero-family-bg.png`, 380×770 — crop determinístico do
+ * PNG original feito com Pillow, arquivo original preservado, nada gerado
+ * por IA) do grupo de personagens sem nenhum cartão de texto, `absolute
+ * inset-0` atrás do texto, `opacity-25` + `mask-image` (gradiente,
+ * esmaece as bordas superior/inferior pro creme — sem borda dura de
+ * retângulo). Por que um recorte à parte em vez do PNG inteiro: o PNG
+ * inteiro com `object-cover` numa caixa estreita e alta corta os CARTÕES
+ * da ilustração ("Pediatra — 10h", "Medicamento — 20h" etc.) de um jeito
+ * arbitrário, deixando fragmentos de texto ilegíveis atrás do
+ * texto/CTAs — o recorte isola só os personagens, então qualquer
+ * crop/opacidade fica limpo. Um `text-shadow` (halo na cor do creme,
+ * herdado por todo o bloco de texto, cancelado em `lg` onde o fundo volta
+ * a ser só o creme liso) separa a letra de qualquer trecho mais escuro da
+ * foto por trás. Contraste no pior caso medido (trecho escuro da foto a
+ * 25% sobre o creme, atrás do ink): ~6.6:1 — acima do piso AA (4.5:1).
+ *
+ * A imagem principal (`zelii-hero-family-care.png`, inteira) continua
+ * exclusiva do `lg`+ (`hidden lg:block`), com o MESMO tratamento
+ * full-bleed de antes — nada mudou aí. Ordem de leitura no DOM continua
+ * texto → CTAs → imagem em todos os tamanhos (a imagem de fundo do
+ * mobile/tablet é puramente decorativa aos olhos do layout, por isso
+ * `pointer-events-none`; `z-10` no bloco de texto garante que ele sempre
+ * fique visualmente por cima, independente da ordem no DOM).
  *
  * Título com tamanho fluido via `clamp()` de 1024px a 1920px (44px a
  * 64px) em vez de um punhado de breakpoints fixos — escala
@@ -42,7 +60,7 @@ import heroImage from '../../public/images/zelii-hero-family-care.png';
 export function Hero() {
   return (
     <section className="relative overflow-hidden bg-gradient-to-b from-bg to-white">
-      <div className="mx-auto max-w-[1240px] px-6 py-16 sm:px-8 sm:py-20 lg:flex lg:min-h-[clamp(560px,30vw+260px,700px)] lg:items-center lg:px-10 lg:py-16 min-[1200px]:px-12">
+      <div className="relative mx-auto min-h-[560px] max-w-[1240px] px-6 py-16 sm:min-h-[620px] sm:px-8 sm:py-20 lg:flex lg:min-h-[clamp(560px,30vw+260px,700px)] lg:items-center lg:px-10 lg:py-16 min-[1200px]:px-12">
         {/* z-10 relativo AQUI (não só no container acima) — a camada de imagem
             (irmã, `lg:absolute`) senão pinta por cima deste bloco mesmo com
             z-0, porque um elemento posicionado sempre fica acima de um
@@ -53,7 +71,13 @@ export function Hero() {
             ilustração (a imagem, escalada pela altura da seção, é mais
             estreita em telas mais baixas/estreitas). Escala de ~440px
             (1024px) a 680px (1440px+). */}
-        <div className="relative z-10 w-full text-center lg:max-w-[clamp(380px,-324px+69.7vw,680px)] lg:text-left">
+        {/* Halo suave (text-shadow herdado pelos filhos) só abaixo de lg —
+            lá o texto agora fica sobre a imagem de fundo (ver abaixo);
+            reforça o contraste/legibilidade contra qualquer trecho mais
+            escuro por trás, sem precisar escurecer a cor do texto em si.
+            Cancelado em lg (`lg:[text-shadow:none]`) onde o fundo volta a
+            ser só o creme liso. */}
+        <div className="relative z-10 w-full text-center [text-shadow:0_0_14px_rgba(255,248,241,0.95),0_0_32px_rgba(255,248,241,0.8)] lg:max-w-[clamp(380px,-324px+69.7vw,680px)] lg:text-left lg:[text-shadow:none]">
           <h1 className="mx-auto text-balance text-4xl font-semibold leading-[1.08] tracking-tight text-ink sm:text-[2.75rem] lg:mx-0 lg:text-[clamp(2.75rem,1.32rem+2.232vw,4rem)] lg:leading-[1.02]">
             Uma família tem mil coisas acontecendo. A ZELII coloca todas em sintonia.
           </h1>
@@ -90,8 +114,21 @@ export function Hero() {
           </div>
         </div>
 
-        {/* Abaixo de lg: em fluxo normal, depois do texto. A partir de lg: camada absoluta cobrindo a section inteira (ver nota acima). */}
-        <div className="relative mt-12 aspect-[1586/992] w-full lg:absolute lg:inset-0 lg:z-0 lg:mt-0 lg:aspect-auto lg:h-full lg:w-full">
+        {/* Fundo abaixo de lg — ver nota no topo do arquivo. */}
+        <div className="pointer-events-none absolute inset-0 z-0 lg:hidden">
+          <Image
+            src={heroImageBg}
+            alt="Ilustração de uma família com três gerações — avó, pais e crianças — em casa, cercada por lembretes de cuidado: consulta com o pediatra, horário do medicamento, autorização escolar entregue e um tempo reservado para quem cuida."
+            fill
+            priority
+            sizes="100vw"
+            className="object-cover object-[center_20%] opacity-25 [-webkit-mask-image:linear-gradient(to_bottom,transparent,black_18%,black_82%,transparent)] [mask-image:linear-gradient(to_bottom,transparent,black_18%,black_82%,transparent)]"
+          />
+        </div>
+
+        {/* A partir de lg: tratamento original v2, sem mudança (camada
+            absoluta cobrindo a section inteira, opacidade cheia). */}
+        <div className="relative mt-12 hidden aspect-[1586/992] w-full lg:absolute lg:inset-0 lg:z-0 lg:mt-0 lg:block lg:aspect-auto lg:h-full lg:w-full">
           <Image
             src={heroImage}
             alt="Ilustração de uma família com três gerações — avó, pais e crianças — em casa, cercada por lembretes de cuidado: consulta com o pediatra, horário do medicamento, autorização escolar entregue e um tempo reservado para quem cuida."
