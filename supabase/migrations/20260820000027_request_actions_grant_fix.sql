@@ -1,0 +1,32 @@
+-- ============================================================================
+-- 0035: real bug found by running the FASE 9 isolation suite against a real
+-- Supabase project (family-app-dev), not just a bare local Postgres.
+--
+-- request_actions was designed as append-only "by omission": every grant
+-- statement for it (20260820000006_grants_v2.sql) only ever issued
+-- `grant select, insert ... to authenticated`, deliberately never granting
+-- UPDATE/DELETE, on the theory that omitting a grant is enough (the same
+-- reasoning already applied, correctly, to audit_events).
+--
+-- That reasoning is incomplete on a real Supabase project: Supabase
+-- provisions every new project with default privileges that grant
+-- `authenticated`/`anon` broad table access from the start, independent of
+-- anything our own migrations grant. A later `grant select, insert` is
+-- ADDITIVE — it does not revoke whatever privilege the project's own
+-- defaults already conferred. So `authenticated` could, in fact, run
+-- `UPDATE public.request_actions ...` on the real project: the statement
+-- succeeded (RLS then filtered it to 0 matching rows, since no UPDATE
+-- policy exists — so it silently no-oped instead of erroring), whereas the
+-- local bare-Postgres dev shim never carries Supabase's default privileges
+-- in the first place, so the same statement correctly raised
+-- "permission denied" locally and masked this gap in every environment
+-- this was tested in before now.
+--
+-- audit_events already got this exact fix in 20260820000022_audit_events_closed.sql
+-- (`revoke update, delete on public.audit_events from authenticated;`).
+-- request_actions is the one other "append-only by omission" table and
+-- needs the same explicit revoke — omitting a GRANT is not equivalent to
+-- REVOKEing a privilege a platform default already conferred.
+-- ============================================================================
+
+revoke update, delete on public.request_actions from authenticated;

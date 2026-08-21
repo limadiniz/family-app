@@ -1,0 +1,41 @@
+# Supabase CLI project config.
+# One Supabase project per environment (development/staging/production) —
+# see master prompt §77 and §95. This file is safe to commit; it holds no
+# secrets. Link the CLI to the right project per environment with:
+#   supabase link --project-ref <ref>
+# and select the target with the `--project-id` / env-specific config
+# override, or by maintaining separate `supabase/config.<env>.toml` files
+# once real project refs exist (TODO: external — needs Supabase projects
+# to be created by the account owner, see docs/checklists/infra-checklist.md).
+
+project_id = "family-app"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+major_version = 17
+
+[studio]
+enabled = true
+port = 54323
+
+[auth]
+enabled = true
+site_url = "http://localhost:3000"
+additional_redirect_urls = ["http://localhost:3000/**", "http://localhost:8081/**"]
+jwt_expiry = 3600
+enable_signup = true
+
+[auth.email]
+enable_signup = true
+enable_confirmations = false
+
+[storage]
+enabled = true
+file_size_limit = "25MiB"

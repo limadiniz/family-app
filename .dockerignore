@@ -1,0 +1,23 @@
+# Keep the Docker build context small and avoid leaking local secrets/build
+# artifacts into the image (the Dockerfile rebuilds everything with `turbo
+# prune` + `turbo build` from source anyway).
+#
+# IMPORTANT: do not exclude any apps/* or packages/* workspace member here —
+# `turbo prune` / `pnpm install` need the full, accurate workspace graph
+# (pnpm-workspace.yaml + pnpm-lock.yaml reference every package) even though
+# only @family-app/api's subset ends up in the final pruned output.
+node_modules
+**/node_modules
+.next
+**/.next
+dist
+**/dist
+.turbo
+**/.turbo
+.git
+architecture-map.html
+backups
+*.log
+.env
+.env.*
+!.env.example

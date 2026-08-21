@@ -1,0 +1,23 @@
+node_modules
+.turbo
+dist
+build
+.next
+out
+coverage
+*.tsbuildinfo
+.env
+.env.local
+.env.*.local
+.expo
+.eas
+ios/Pods
+android/.gradle
+*.log
+.DS_Store
+.vercel
+supabase/.temp
+
+# Local database backups (pg_dump output) — contain real family/health data
+# once the app has real users. Never committed; see DATABASE_ENVIRONMENTS.md §5.
+backups/

@@ -1,0 +1,32 @@
+{
+  "expo": {
+    "name": "Family App",
+    "slug": "family-app",
+    "scheme": "familyapp",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "splash": {
+      "backgroundColor": "#FBF9F6"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "br.com.familyapp.mobile",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Usado para fotografar documentos e comunicados escolares.",
+        "NSPhotoLibraryUsageDescription": "Usado para anexar documentos da galeria de fotos.",
+        "NSFaceIDUsageDescription": "Usado para proteger o acesso rápido ao aplicativo."
+      }
+    },
+    "android": {
+      "package": "br.com.familyapp.mobile",
+      "permissions": ["CAMERA", "READ_MEDIA_IMAGES", "POST_NOTIFICATIONS"]
+    },
+    "plugins": ["expo-router"],
+    "extra": {
+      "eas": {
+        "projectId": "REPLACE_WITH_EAS_PROJECT_ID"
+      }
+    }
+  }
+}
