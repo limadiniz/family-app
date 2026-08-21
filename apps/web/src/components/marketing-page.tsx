@@ -1,3 +1,4 @@
+import { SiteFooter } from './site-footer';
 import { SiteNav } from './site-nav';
 
 export function MarketingPage({ title, children }: { title: string; children: React.ReactNode }) {
@@ -10,6 +11,7 @@ export function MarketingPage({ title, children }: { title: string; children: Re
           {children}
         </div>
       </main>
+      <SiteFooter />
     </>
   );
 }
