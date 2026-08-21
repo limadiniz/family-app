@@ -1,4 +1,4 @@
-name: CI
+﻿name: CI
 
 on:
   pull_request:
@@ -34,9 +34,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # No `version:` here on purpose — pnpm/action-setup@v4 reads it from
+      # package.json's "packageManager" field (pnpm@10.28.0) automatically.
+      # Specifying both there and here is a hard error as of action-setup v4
+      # ("Multiple versions of pnpm specified"), found by the first real run
+      # of this workflow against a live GitHub repo (2026-08-21).
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
 
       - uses: actions/setup-node@v4
         with:
