@@ -48,6 +48,7 @@ function OnboardingWizard() {
   const searchParams = useSearchParams();
   const [returnTo] = useState(() => resolveSafeReturnTo(searchParams.get('returnTo')));
   const [step, setStep] = useState(1);
+  const [ownerName, setOwnerName] = useState('');
   const [familyUnitId, setFamilyUnitId] = useState<string | null>(null);
   const [familyUnitName, setFamilyUnitName] = useState('');
   const [childName, setChildName] = useState('');
@@ -63,6 +64,17 @@ function OnboardingWizard() {
     setError(null);
     setBusy(true);
     try {
+      // POST /onboarding/bootstrap is what actually materializes this
+      // account's Tenant + Person (§ OnboardingService.bootstrap) — every
+      // other endpoint, including the family-units one right below,
+      // requires actor.tenantId/personId to already exist and rejects with
+      // ONBOARDING_REQUIRED otherwise. Without this call first, a brand
+      // new account could never get past step 1: the very action meant to
+      // create that structure would be the thing blocked by its absence.
+      // Idempotent (OnboardingService returns the existing ids if this
+      // account was already bootstrapped), so safe to call again if the
+      // person retries after an earlier failure.
+      await apiFetch('/onboarding/bootstrap', { method: 'POST', body: JSON.stringify({ displayName: ownerName }) });
       const unit = await apiFetch<{ id: string }>('/family-units', {
         method: 'POST',
         body: JSON.stringify({ name: familyUnitName || 'Minha família' }),
@@ -143,14 +155,22 @@ function OnboardingWizard() {
       {step === 1 && (
         <Card className="mt-6">
           <h1 className="text-2xl font-semibold text-ink">Vamos organizar sua família</h1>
-          <p className="mt-2 text-sm text-inkMuted">Leva menos de 2 minutos. Comece dando um nome à sua unidade familiar.</p>
+          <p className="mt-2 text-sm text-inkMuted">Leva menos de 2 minutos. Comece com o seu nome e o nome da sua unidade familiar.</p>
           <Input
             className="mt-4"
+            label="Seu nome"
+            value={ownerName}
+            onChange={(e) => setOwnerName(e.target.value)}
+            placeholder="Como a ZELII deve te chamar"
+          />
+          <Input
+            className="mt-3"
+            label="Unidade familiar"
             value={familyUnitName}
             onChange={(e) => setFamilyUnitName(e.target.value)}
             placeholder="Ex: Família da Ana"
           />
-          <Button onClick={createFamilyUnit} disabled={busy} className="mt-4">
+          <Button onClick={createFamilyUnit} disabled={busy || !ownerName.trim()} className="mt-4">
             Continuar
           </Button>
         </Card>
