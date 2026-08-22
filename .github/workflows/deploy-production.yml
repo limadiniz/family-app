@@ -1,0 +1,112 @@
+name: Deploy — Production
+
+# Production Supabase migrations + apps/api (Fly.io) on every push to `main`.
+#
+# apps/web is deliberately NOT deployed from here — same reasoning as
+# deploy-staging.yml: Vercel's own GitHub integration handles it. See
+# DEPLOYMENT.md "CD — production".
+#
+# This pipeline follows DEPLOYMENT.md's documented target for production:
+# validate → backup → migration → deploy → health check → smoke test.
+#
+# GATING: create a `production` GitHub Environment (Settings → Environments)
+# with required reviewers turned on. Every job below sets
+# `environment: production`, so the whole pipeline pauses for manual
+# approval before touching the real database — this is the actual
+# enforcement point for "no unreviewed production deploy", not a suggestion.
+#
+# Required repo secrets — see DEPLOYMENT.md "Secrets by host" for exactly
+# where each one is generated:
+#   SUPABASE_ACCESS_TOKEN           — personal/org access token (shared with staging)
+#   SUPABASE_PRODUCTION_PROJECT_REF — production project's ref
+#   SUPABASE_PRODUCTION_DB_URL      — production pooler connection string (used ONLY for
+#                                      the pre-deploy pg_dump backup step below; rotate
+#                                      this password periodically, same as the
+#                                      docs/checklists/infra-checklist.md pendency)
+#   FLY_API_TOKEN_PRODUCTION        — `fly tokens create deploy -a family-app-api-production`
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false # never cancel mid-migration or mid-backup
+
+jobs:
+  backup:
+    name: Pre-deploy backup (production database)
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: pg_dump — schema + data
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+          mkdir -p backups
+          stamp=$(date -u +%Y%m%dT%H%M%SZ)
+          pg_dump "$DATABASE_URL" --schema-only > "backups/${stamp}_production_schema.sql"
+          pg_dump "$DATABASE_URL" --data-only --column-inserts > "backups/${stamp}_production_data.sql"
+        env:
+          DATABASE_URL: ${{ secrets.SUPABASE_PRODUCTION_DB_URL }}
+
+      - name: Upload backup as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-backup-${{ github.sha }}
+          path: backups/
+          retention-days: 90
+
+  migrate:
+    name: Apply migrations (production Supabase project)
+    needs: backup
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Link project + push migrations
+        run: |
+          supabase link --project-ref "${{ secrets.SUPABASE_PRODUCTION_PROJECT_REF }}"
+          supabase db push
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+
+  deploy-api:
+    name: Deploy apps/api (Fly.io)
+    needs: migrate
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: fly deploy
+        run: flyctl deploy --config fly.production.toml --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_PRODUCTION }}
+
+  smoke-test:
+    name: Smoke test — GET /health
+    needs: deploy-api
+    runs-on: ubuntu-latest
+    steps:
+      - name: Poll apps/api health endpoint
+        run: |
+          url="https://family-app-api-production.fly.dev/health"
+          for i in $(seq 1 10); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "$url" || echo "000")
+            if [ "$code" = "200" ]; then
+              echo "apps/api is healthy ($url)"
+              exit 0
+            fi
+            echo "attempt $i/10: got HTTP $code from $url, retrying in 6s..."
+            sleep 6
+          done
+          echo "::error::apps/api did not report healthy at $url after deploy — consider rollback (redeploy the previous Fly release: 'fly releases -a family-app-api-production' then 'fly deploy --image <previous-image>'), see DEPLOYMENT.md."
+          exit 1
