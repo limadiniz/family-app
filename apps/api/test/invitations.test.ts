@@ -166,4 +166,17 @@ describe('InvitationsService — conexão entre responsáveis', () => {
 
     await expect(service.accept(actor, 'token-for-someone-else', 'Ana')).rejects.toThrow(/conta correta/i);
   });
+
+  it('never exposes a database error to the invited person', async () => {
+    const service = new InvitationsService({
+      forUser: () => ({
+        rpc: vi.fn().mockResolvedValue({
+          data: null,
+          error: { message: 'column reference "family_unit_id" is ambiguous' },
+        }),
+      }),
+    } as unknown as SupabaseService);
+
+    await expect(service.accept(actor, 'valid-looking-token', 'Luana')).rejects.toThrow(/processar este convite agora/i);
+  });
 });

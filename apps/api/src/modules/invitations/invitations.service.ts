@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
 import type { RequestActor } from '../../common/auth.guard';
 import { SupabaseService } from '../../common/supabase.service';
@@ -16,6 +16,8 @@ type InvitationDelivery = {
 
 @Injectable()
 export class InvitationsService {
+  private readonly logger = new Logger(InvitationsService.name);
+
   constructor(private readonly supabase: SupabaseService) {}
 
   private db(actor: RequestActor) {
@@ -153,7 +155,10 @@ export class InvitationsService {
 
   async lookup(actor: RequestActor, token: string) {
     const { data, error } = await this.db(actor).rpc('lookup_family_invitation', { p_token: token });
-    if (error) throw new BadRequestException(this.friendlyRpcError(error.message));
+    if (error) {
+      this.logger.warn(`Invitation lookup failed: ${error.message}`);
+      throw new BadRequestException(this.friendlyRpcError(error.message));
+    }
     const row = Array.isArray(data) ? data[0] : data;
     if (!row) throw new NotFoundException('Este convite expirou, foi cancelado ou já foi usado.');
     return row;
@@ -165,7 +170,10 @@ export class InvitationsService {
       p_token: token,
       p_display_name: displayName.trim(),
     });
-    if (error) throw new BadRequestException(this.friendlyRpcError(error.message));
+    if (error) {
+      this.logger.warn(`Invitation acceptance failed: ${error.message}`);
+      throw new BadRequestException(this.friendlyRpcError(error.message));
+    }
     const row = Array.isArray(data) ? data[0] : data;
     if (!row) throw new BadRequestException('Não foi possível concluir o vínculo familiar.');
     return { tenantId: row.tenant_id, personId: row.person_id, familyUnitId: row.family_unit_id };
@@ -176,7 +184,7 @@ export class InvitationsService {
     if (message.includes('invalid_or_expired_invitation')) return 'Este convite expirou, foi cancelado ou já foi usado.';
     if (message.includes('authentication_required')) return 'Entre na sua conta para aceitar o convite.';
     if (message.includes('display_name_required')) return 'Informe seu nome para entrar na família.';
-    return message;
+    return 'Não foi possível processar este convite agora. Tente novamente em alguns instantes.';
   }
 
   private async sendInvitationEmail(inviteeEmail: string, token: string): Promise<InvitationDelivery> {

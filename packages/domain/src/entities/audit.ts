@@ -30,6 +30,7 @@ export const auditEventTypeSchema = z.enum([
   'INVITATION_SENT',
   'INVITATION_ACCEPTED',
   'POLICY_DECISION',
+  'PROFILE_UPDATED',
   // V2 additions (Command Center / Universal Inbox / Request Engine, §64):
   'CALENDAR_EVENT_CREATED',
   'TASK_CREATED',

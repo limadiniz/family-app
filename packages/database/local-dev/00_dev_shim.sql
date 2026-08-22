@@ -50,8 +50,24 @@ as $$
   select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid;
 $$;
 
+-- Mirrors the small portion of Supabase's auth.jwt() used by invitation
+-- acceptance. PostgREST normally exposes the verified claims through a GUC;
+-- integration tests set the two relevant claims explicitly.
+create or replace function auth.jwt()
+returns jsonb
+language sql
+stable
+as $$
+  select jsonb_build_object(
+    'sub', nullif(current_setting('request.jwt.claim.sub', true), ''),
+    'email', nullif(current_setting('request.jwt.claim.email', true), '')
+  );
+$$;
+
 grant usage on schema auth to anon, authenticated, service_role;
 grant select on auth.users to anon, authenticated, service_role;
+grant execute on function auth.uid() to anon, authenticated, service_role;
+grant execute on function auth.jwt() to anon, authenticated, service_role;
 
 -- Minimal Supabase Storage stub — real Supabase provides `storage.buckets`/
 -- `storage.objects` with a much richer shape; this is only enough for

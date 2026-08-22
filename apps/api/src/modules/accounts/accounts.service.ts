@@ -1,5 +1,6 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import type { RequestActor } from '../../common/auth.guard';
+import { AuditService } from '../../common/audit.service';
 import { SupabaseService } from '../../common/supabase.service';
 
 /**
@@ -13,7 +14,53 @@ import { SupabaseService } from '../../common/supabase.service';
  */
 @Injectable()
 export class AccountsService {
-  constructor(private readonly supabase: SupabaseService) {}
+  constructor(
+    private readonly supabase: SupabaseService,
+    private readonly audit: AuditService,
+  ) {}
+
+  async getMyProfile(actor: RequestActor) {
+    this.requireCurrentPerson(actor);
+    const { data, error } = await this.supabase
+      .forUser(actor.bearerToken)
+      .from('persons')
+      .select('id, display_name')
+      .eq('id', actor.personId)
+      .eq('tenant_id', actor.tenantId)
+      .maybeSingle();
+    if (error) throw new BadRequestException(error.message);
+    if (!data) throw new NotFoundException('Seu perfil não foi encontrado nesta família.');
+    return { id: data.id, displayName: data.display_name, email: actor.email ?? '' };
+  }
+
+  async updateMyProfile(actor: RequestActor, input: { displayName: string }) {
+    this.requireCurrentPerson(actor);
+    const displayName = input.displayName?.trim();
+    if (!displayName || displayName.length < 2 || displayName.length > 150) {
+      throw new BadRequestException('Informe um nome entre 2 e 150 caracteres.');
+    }
+
+    const { data, error } = await this.supabase
+      .forUser(actor.bearerToken)
+      .from('persons')
+      .update({ display_name: displayName })
+      .eq('id', actor.personId)
+      .eq('tenant_id', actor.tenantId)
+      .select('id, display_name')
+      .maybeSingle();
+    if (error) throw new BadRequestException(error.message);
+    if (!data) throw new NotFoundException('Seu perfil não foi encontrado nesta família.');
+
+    await this.audit.record(actor, {
+      eventType: 'PROFILE_UPDATED',
+      subjectPersonId: actor.personId,
+      resourceType: 'persons',
+      resourceId: actor.personId ?? undefined,
+      result: 'SUCCESS',
+      context: { changedFields: ['display_name'] },
+    });
+    return { id: data.id, displayName: data.display_name, email: actor.email ?? '' };
+  }
 
   async listMyTenants(actor: RequestActor) {
     if (actor.tenantMemberships.length === 0) {
@@ -42,5 +89,11 @@ export class AccountsService {
         personDisplayName: personName.get(m.personId) ?? '',
       })),
     };
+  }
+
+  private requireCurrentPerson(actor: RequestActor): asserts actor is RequestActor & { tenantId: string; personId: string } {
+    if (!actor.tenantId || !actor.personId) {
+      throw new BadRequestException('Selecione a família em que deseja editar seu perfil.');
+    }
   }
 }

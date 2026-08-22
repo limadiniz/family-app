@@ -1,4 +1,4 @@
-import { Controller, Get, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Patch, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { AuthGuard } from '../../common/auth.guard';
 import type { RequestActor } from '../../common/auth.guard';
@@ -11,6 +11,16 @@ import { AccountsService } from './accounts.service';
 @Controller('accounts')
 export class AccountsController {
   constructor(private readonly service: AccountsService) {}
+
+  @Get('me/profile')
+  getMyProfile(@CurrentActor() actor: RequestActor) {
+    return this.service.getMyProfile(actor);
+  }
+
+  @Patch('me/profile')
+  updateMyProfile(@CurrentActor() actor: RequestActor, @Body() body: { displayName: string }) {
+    return this.service.updateMyProfile(actor, body);
+  }
 
   /**
    * `requireOnboarded: false` de propósito: uma conta com 2+ famílias
