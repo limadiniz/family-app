@@ -42,7 +42,22 @@ jobs:
     steps:
       - name: pg_dump — schema + data
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+          # Ubuntu's own `postgresql-client` package lags behind Supabase's
+          # server version (currently Postgres 17.x) — pg_dump refuses to
+          # dump from a server newer than itself, so we pull the matching
+          # client straight from the official PGDG apt repo instead of the
+          # Ubuntu-shipped one. Bump PG_CLIENT_MAJOR if Supabase moves to a
+          # newer major version later.
+          PG_CLIENT_MAJOR=17
+          sudo apt-get install -y -qq curl ca-certificates gnupg
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq "postgresql-client-${PG_CLIENT_MAJOR}"
+          export PATH="/usr/lib/postgresql/${PG_CLIENT_MAJOR}/bin:$PATH"
+          pg_dump --version
           mkdir -p backups
           stamp=$(date -u +%Y%m%dT%H%M%SZ)
           pg_dump "$DATABASE_URL" --schema-only > "backups/${stamp}_production_schema.sql"
