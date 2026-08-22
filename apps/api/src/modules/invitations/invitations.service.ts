@@ -4,6 +4,10 @@ import type { RequestActor } from '../../common/auth.guard';
 import { SupabaseService } from '../../common/supabase.service';
 
 const RESPONSIBLE_ROLES = new Set(['GUARDIAN', 'CO_GUARDIAN']);
+const PERMISSION_PRESET_BY_ROLE: Record<string, string> = {
+  GUARDIAN: 'RESPONSAVEL_COMPLETO',
+  CO_GUARDIAN: 'RESPONSAVEL_COMPARTILHADO',
+};
 
 type InvitationDelivery = {
   channel: 'EMAIL';
@@ -75,7 +79,7 @@ export class InvitationsService {
         invitee_email: inviteeEmail,
         proposed_relationship: 'SPOUSE_PARTNER',
         proposed_role: role,
-        permission_preset: role === 'GUARDIAN' ? 'RESPONSAVEL_COMPLETO' : 'RESPONSAVEL_COMPARTILHADO',
+        permission_preset: PERMISSION_PRESET_BY_ROLE[role],
         subject_person_ids: subjectPersonIds,
         token,
         expires_at: expiresAt,
