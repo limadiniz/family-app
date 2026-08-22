@@ -16,6 +16,7 @@ import type { RequestActor } from '../src/common/auth.guard';
  */
 function makeFakeSupabaseClient(responses: Record<string, { data: unknown; error: unknown } | Array<{ data: unknown; error: unknown }>>) {
   const counters: Record<string, number> = {};
+  const queryCalls: Array<{ table: string; method: string; args: unknown[] }> = [];
   function resolveFor(table: string) {
     const entry = responses[table];
     if (!entry) return { data: [], error: null };
@@ -26,15 +27,18 @@ function makeFakeSupabaseClient(responses: Record<string, { data: unknown; error
   }
   function from(table: string) {
     const builder: Record<string, unknown> = {};
-    for (const method of ['select', 'eq', 'order', 'gte', 'lte', 'limit', 'insert', 'update']) {
-      builder[method] = () => builder;
+    for (const method of ['select', 'eq', 'is', 'order', 'gte', 'lte', 'limit', 'insert', 'update']) {
+      builder[method] = (...args: unknown[]) => {
+        queryCalls.push({ table, method, args });
+        return builder;
+      };
     }
     builder['then'] = (onFulfilled: (v: unknown) => unknown) => Promise.resolve(resolveFor(table)).then(onFulfilled);
     builder['maybeSingle'] = async () => resolveFor(table);
     builder['single'] = async () => resolveFor(table);
     return builder;
   }
-  return { client: { from } };
+  return { client: { from }, queryCalls };
 }
 
 const ANA: RequestActor = { authUserId: 'auth-ana', tenantId: 'tenant-1', personId: 'ana', bearerToken: 'token-ana' };
@@ -53,7 +57,7 @@ function makeService(opts: {
   loadPolicyEngineInput?: ReturnType<typeof vi.fn>;
   authorizeOrThrow?: ReturnType<typeof vi.fn>;
 }) {
-  const { client } = makeFakeSupabaseClient(opts.responses);
+  const { client, queryCalls } = makeFakeSupabaseClient(opts.responses);
   const auditRecord = opts.auditRecord ?? vi.fn().mockResolvedValue(undefined);
   const loadPolicyEngineInput = opts.loadPolicyEngineInput ?? vi.fn().mockResolvedValue(ALLOW_ALL_POLICY_INPUT);
   const authorizeOrThrow = opts.authorizeOrThrow ?? vi.fn().mockResolvedValue(undefined);
@@ -65,7 +69,7 @@ function makeService(opts: {
     { loadPolicyEngineInput, authorizeOrThrow } as unknown as PolicyService,
     { record: auditRecord } as unknown as AuditService,
   );
-  return { service, auditRecord, loadPolicyEngineInput, authorizeOrThrow };
+  return { service, auditRecord, loadPolicyEngineInput, authorizeOrThrow, queryCalls };
 }
 
 afterEach(() => {
@@ -141,6 +145,15 @@ describe('AiService.ask — enabled, no provider key configured (deterministic f
 });
 
 describe('AiService — authorized persistent memory', () => {
+  it('queries non-revoked memories with IS NULL instead of casting the string "null" as a timestamp', async () => {
+    const { service, queryCalls } = makeService({ responses: { ai_memory_items: { data: [], error: null } } });
+
+    await service.listMemory(ANA, 'pedro');
+
+    expect(queryCalls).toContainEqual({ table: 'ai_memory_items', method: 'is', args: ['revoked_at', null] });
+    expect(queryCalls).not.toContainEqual({ table: 'ai_memory_items', method: 'eq', args: ['revoked_at', null] });
+  });
+
   it('creates memory only after explicit confirmation and audits without the summary', async () => {
     const auditRecord = vi.fn().mockResolvedValue(undefined);
     const authorizeOrThrow = vi.fn().mockResolvedValue(undefined);

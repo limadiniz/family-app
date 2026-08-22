@@ -98,7 +98,7 @@ export class AiService {
       .from('ai_memory_items')
       .select('id, subject_person_id, domain, memory_type, summary, source_refs, valid_until, last_verified_at, created_at')
       .eq('subject_person_id', subjectPersonId)
-      .eq('revoked_at', null)
+      .is('revoked_at', null)
       .order('created_at', { ascending: false });
     if (error) throw new BadRequestException(error.message);
 
@@ -167,7 +167,7 @@ export class AiService {
       .from('ai_memory_items')
       .select('id, subject_person_id, domain')
       .eq('id', memoryId)
-      .eq('revoked_at', null)
+      .is('revoked_at', null)
       .maybeSingle();
     if (findError) throw new BadRequestException(findError.message);
     if (!memory) throw new NotFoundException('Memória não encontrada ou já revogada.');
@@ -245,7 +245,7 @@ export class AiService {
       .select('id, summary, valid_until, last_verified_at')
       .eq('subject_person_id', subjectPersonId)
       .eq('domain', domain)
-      .eq('revoked_at', null)
+      .is('revoked_at', null)
       .order('last_verified_at', { ascending: false })
       .limit(20);
     if (error || !data) return [];
