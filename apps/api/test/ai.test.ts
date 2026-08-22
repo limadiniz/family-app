@@ -27,7 +27,7 @@ function makeFakeSupabaseClient(responses: Record<string, { data: unknown; error
   }
   function from(table: string) {
     const builder: Record<string, unknown> = {};
-    for (const method of ['select', 'eq', 'is', 'order', 'gte', 'lte', 'limit', 'insert', 'update']) {
+    for (const method of ['select', 'eq', 'is', 'in', 'order', 'gte', 'lte', 'limit', 'insert', 'update', 'upsert']) {
       builder[method] = (...args: unknown[]) => {
         queryCalls.push({ table, method, args });
         return builder;
@@ -205,6 +205,33 @@ describe('AiService — authorized persistent memory', () => {
     ).rejects.toThrow();
     expect(authorizeOrThrow).not.toHaveBeenCalled();
   });
+
+  it('does not create memory when personalized memory is disabled', async () => {
+    const { service, authorizeOrThrow } = makeService({
+      responses: { ai_memory_preferences: { data: { memory_enabled: false }, error: null } },
+    });
+    await expect(service.createMemory(ANA, {
+      subjectPersonId: 'pedro',
+      domain: 'SCHEDULE',
+      memoryType: 'PREFERENCE',
+      summary: 'Uma preferência confirmada.',
+      sourceRefs: [{ type: 'user_confirmation' }],
+      confirmed: true,
+    })).rejects.toThrow(/desativada/i);
+    expect(authorizeOrThrow).not.toHaveBeenCalled();
+  });
+
+  it('filters expired memory before returning it to the caller', async () => {
+    const { service } = makeService({
+      responses: {
+        ai_memory_items: {
+          data: [{ id: 'expired', domain: 'SCHEDULE', summary: 'Antiga', valid_until: '2020-01-01T00:00:00Z' }],
+          error: null,
+        },
+      },
+    });
+    await expect(service.listMemory(ANA, 'pedro')).resolves.toEqual([]);
+  });
 });
 
 describe('AiService.ask — enabled, provider configured', () => {
@@ -239,6 +266,20 @@ describe('AiService.ask — enabled, provider configured', () => {
 
     const answer = await service.ask(ANA, 'O que tenho amanhã?', ['pedro']);
     expect(answer.text).toContain('Pediatra'); // deterministic fallback, not a thrown error
+  });
+
+  it('rejects unsafe medical output from the provider and uses the sourced fallback', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ content: [{ type: 'text', text: 'Aumente a dose e pare de tomar amanhã.' }] }),
+    }));
+    process.env.AI_PROVIDER_API_KEY = 'sk-test';
+    const { service } = makeService({
+      responses: { health_profiles: { data: { id: 'h1', blood_type: 'O+', updated_at: '2026-08-20T10:00:00Z' }, error: null } },
+    });
+    const answer = await service.ask(ANA, 'O que fazer sobre a saúde de Pedro?', ['pedro']);
+    expect(answer.text).not.toContain('Aumente a dose');
+    expect(answer.text).toContain('Fonte: health_profiles');
   });
 });
 

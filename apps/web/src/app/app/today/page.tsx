@@ -67,6 +67,22 @@ interface ActivityItem {
   eventType: string;
 }
 
+interface ProactiveInsight {
+  id: string;
+  insight_type: string;
+  severity: 'INFO' | 'ATTENTION' | 'BLOCKING';
+  title: string;
+  summary: string;
+  rule_id: string;
+  proposed_action_type: string | null;
+}
+
+interface InsightsResponse {
+  enabled: boolean;
+  suppressedReason: 'DISABLED' | 'QUIET_HOURS' | null;
+  insights: ProactiveInsight[];
+}
+
 function localDayIso(date = new Date()): string {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -94,6 +110,7 @@ export default function TodayPage() {
   const [reloadKey, setReloadKey] = useState(0);
   const [createdPreparationIds, setCreatedPreparationIds] = useState<Set<string>>(new Set());
   const [preparationError, setPreparationError] = useState<string | null>(null);
+  const [insights, setInsights] = useState<InsightsResponse | null>(null);
 
   const load = useCallback(() => {
     setError(null);
@@ -116,6 +133,10 @@ export default function TodayPage() {
     apiFetch<ActivityItem[]>('/activity-feed?limit=8')
       .then(setActivity)
       .catch(() => setActivity([]));
+
+    apiFetch<InsightsResponse>(`/ai/insights?date=${date}`)
+      .then(setInsights)
+      .catch(() => setInsights(null));
   }, []);
 
   useEffect(load, [load, reloadKey]);
@@ -146,6 +167,14 @@ export default function TodayPage() {
     } catch (err) {
       setPreparationError(err instanceof Error ? err.message : 'Não foi possível criar a tarefa.');
     }
+  }
+
+  async function dismissInsight(id: string) {
+    await apiFetch(`/ai/insights/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status: 'DISMISSED' }),
+    });
+    setInsights((current) => current ? { ...current, insights: current.insights.filter((item) => item.id !== id) } : current);
   }
 
   const needsAttentionCount =
@@ -196,6 +225,42 @@ export default function TodayPage() {
               </span>
             ))}
           </div>
+
+          {insights?.enabled && insights.insights.length > 0 && (
+            <section aria-labelledby="zelii-insights-heading">
+              <div className="flex items-end justify-between gap-3">
+                <div>
+                  <h2 id="zelii-insights-heading" className="text-xl font-semibold text-ink">A ZELII percebeu</h2>
+                  <p className="mt-1 text-sm text-inkMuted">Avisos criados por regras da agenda — você continua no controle.</p>
+                </div>
+                <Link href="/app/ai" className="text-sm font-medium text-primary underline">Perguntar à ZELII</Link>
+              </div>
+              <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                {insights.insights.map((insight) => (
+                  <Card key={insight.id} className={insight.severity === 'BLOCKING' ? 'border-critical/30 bg-critical/5' : 'border-info/25 bg-info/5'}>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-info">Sugestão revisável</p>
+                    <h3 className="mt-2 font-semibold text-ink">{insight.title}</h3>
+                    <p className="mt-1 text-sm text-ink">{insight.summary}</p>
+                    <p className="mt-2 text-xs text-inkMuted">Origem: regra determinística da ZELII · {insight.rule_id}</p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {insight.proposed_action_type && (
+                        <Link href="/app/ai" className="inline-flex min-h-touch items-center rounded-md bg-primary px-3 text-sm font-semibold text-white">
+                          Preparar ação
+                        </Link>
+                      )}
+                      <Button type="button" size="sm" variant="secondary" onClick={() => void dismissInsight(insight.id)}>
+                        Agora não
+                      </Button>
+                    </div>
+                  </Card>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {insights?.enabled && insights.suppressedReason === 'QUIET_HOURS' && (
+            <p className="text-sm text-inkMuted">Os avisos da ZELII estão pausados durante o horário silencioso.</p>
+          )}
 
           <section aria-labelledby="attention-heading">
             <div className="flex items-center justify-between gap-3">

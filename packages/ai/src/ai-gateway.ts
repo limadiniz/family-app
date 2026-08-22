@@ -1,6 +1,7 @@
-import { FamilyPolicyEngine, type PolicyActor, type PolicyEngineInput } from '@family-app/policy-engine';
-import { buildRetrievalRequests } from './intent';
-import type { AiAnswer, LlmCompletionFn, RetrievalFn, RetrievedFact } from './types';
+import type { PolicyActor, PolicyEngineInput } from '@family-app/policy-engine';
+import type { PermissionDomain } from '@family-app/domain';
+import { buildStructuredDecision, DecisionContextBuilder } from './decision-context';
+import type { AiAnswer, DecisionSignal, LlmCompletionFn, RetrievalFn } from './types';
 
 /**
  * AI Gateway (§53-58). This is the ONLY component allowed to sit between
@@ -15,18 +16,26 @@ import type { AiAnswer, LlmCompletionFn, RetrievalFn, RetrievedFact } from './ty
  * through apps/api, which is the only caller of this class.
  */
 export class AiGateway {
-  private readonly policyEngine = new FamilyPolicyEngine();
-
   constructor(
     private readonly deps: {
       retrieve: RetrievalFn;
       complete: LlmCompletionFn;
       loadPolicyInput: (actor: PolicyActor, subjectPersonId: string) => Promise<PolicyEngineInput>;
+      loadSignals?: (input: {
+        actor: PolicyActor;
+        subjectPersonIds: string[];
+        allowedDomains: PermissionDomain[];
+        authorizedScopes: Array<{ subjectPersonId: string; domain: PermissionDomain; decisionRule: string }>;
+        facts: import('./types').AuthorizedFact[];
+        timeWindow?: { startsAt: string; endsAt: string };
+      }) => Promise<DecisionSignal[]>;
       recordAudit: (event: {
         actor: PolicyActor;
-        question: string;
         allowedDomains: string[];
         deniedDomains: string[];
+        factCount: number;
+        signalCount: number;
+        availableActions: string[];
       }) => Promise<void>;
       aiEnabled: boolean;
     },
@@ -41,50 +50,43 @@ export class AiGateway {
       };
     }
 
-    const requests = buildRetrievalRequests(question, subjectPersonIds);
+    const context = await new DecisionContextBuilder({
+      retrieve: this.deps.retrieve,
+      loadPolicyInput: this.deps.loadPolicyInput,
+      loadSignals: this.deps.loadSignals,
+    }).build(actor, question, subjectPersonIds);
 
-    const facts: RetrievedFact[] = [];
-    const deniedDomains: string[] = [];
-    const allowedDomains: string[] = [];
+    await this.deps.recordAudit({
+      actor,
+      allowedDomains: context.allowedDomains,
+      deniedDomains: context.deniedDomains,
+      factCount: context.authorizedFacts.length,
+      signalCount: context.deterministicSignals.length,
+      availableActions: context.availableActions,
+    });
 
-    for (const request of requests) {
-      const policyInput = await this.deps.loadPolicyInput(actor, request.subjectPersonId);
-      const decision = this.policyEngine.authorize(
-        {
-          actor,
-          action: 'VIEW',
-          domain: request.domain,
-          subjectPersonId: request.subjectPersonId,
-          subjectTenantId: actor.tenantId,
-          context: { purpose: `ai_query: ${question}` },
-        },
-        policyInput,
-      );
-
-      if (decision.decision !== 'ALLOW') {
-        deniedDomains.push(request.domain);
-        continue;
-      }
-
-      allowedDomains.push(request.domain);
-      const retrieved = await this.deps.retrieve(request);
-      facts.push(...retrieved);
-    }
-
-    await this.deps.recordAudit({ actor, question, allowedDomains, deniedDomains });
-
-    if (facts.length === 0) {
+    if (context.authorizedFacts.length === 0 && context.deterministicSignals.length === 0) {
       return {
         text:
-          deniedDomains.length > 0
+          context.deniedDomains.length > 0
             ? 'Você não tem permissão para acessar essa informação.'
             : 'Não encontrei informações registradas para responder a essa pergunta.',
         facts: [],
-        deniedDomains: deniedDomains as never,
+        deniedDomains: context.deniedDomains,
       };
     }
 
-    const text = await this.deps.complete({ question, facts });
-    return { text, facts, deniedDomains: deniedDomains as never };
+    const text = await this.deps.complete({
+      question,
+      facts: context.authorizedFacts,
+      signals: context.deterministicSignals,
+      allowedDomains: context.allowedDomains,
+    });
+    return {
+      text,
+      facts: context.authorizedFacts,
+      deniedDomains: context.deniedDomains,
+      decision: buildStructuredDecision(context, text),
+    };
   }
 }

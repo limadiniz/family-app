@@ -14,10 +14,40 @@ interface Fact {
   summary: string;
 }
 
+interface DecisionAlternative {
+  id: string;
+  title: string;
+  impact: string;
+  informationShared: string[];
+  dependencies: string[];
+  uncertainty?: string;
+  proposedActionType?: string;
+}
+
+interface StructuredDecision {
+  situation: string;
+  attention: Array<{ severity: 'INFO' | 'ATTENTION' | 'BLOCKING'; text: string; ruleId: string }>;
+  alternatives: DecisionAlternative[];
+  suggestion?: { text: string; criteria: string[]; uncertainty?: string };
+  userActions: string[];
+  sources: Array<{
+    factId: string;
+    label: string;
+    sourceType: string;
+    sourceId: string;
+    updatedAt?: string;
+    provenance: string;
+    verificationStatus: string;
+  }>;
+  accessedScope: { subjectPersonIds: string[]; domains: string[]; deniedDomains: string[] };
+  safetyNotice?: string;
+}
+
 interface AiAnswer {
   text: string;
   facts: Fact[];
   deniedDomains: string[];
+  decision?: StructuredDecision;
   suggestedAction?: { type: string; payload: Record<string, unknown> };
 }
 
@@ -33,7 +63,30 @@ interface MemoryItem {
   memory_type: string;
   summary: string;
   valid_until: string | null;
+  last_verified_at?: string;
+  source_refs?: Array<{ type: string; id?: string }>;
+  usage_count?: number;
+  last_used_at?: string | null;
+  verification_status?: string;
   created_at: string;
+}
+
+interface MemoryPreferences {
+  memory_enabled: boolean;
+  proactive_enabled: boolean;
+  explanation_detail: 'CONCISE' | 'BALANCED' | 'DETAILED';
+  quiet_hours_start: string | null;
+  quiet_hours_end: string | null;
+}
+
+interface ProposalItem {
+  id: string;
+  proposal_type: string;
+  status: string;
+  version: number;
+  expires_at: string;
+  uncertain_fields: string[];
+  expected_effects: string[];
 }
 
 const MEMORY_DOMAINS = [
@@ -64,7 +117,7 @@ const MEMORY_TYPES = [
  */
 export default function AiPage() {
   const [people, setPeople] = useState<Person[] | null>(null);
-  const [selectedPersonId, setSelectedPersonId] = useState<string | null>(null);
+  const [selectedPersonIds, setSelectedPersonIds] = useState<string[]>([]);
   const [question, setQuestion] = useState('');
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [loading, setLoading] = useState(false);
@@ -77,14 +130,24 @@ export default function AiPage() {
   const [memoryConfirmed, setMemoryConfirmed] = useState(false);
   const [memorySaving, setMemorySaving] = useState(false);
   const [memoryError, setMemoryError] = useState<string | null>(null);
+  const [memoryPreferences, setMemoryPreferences] = useState<MemoryPreferences | null>(null);
+  const [usageByMemory, setUsageByMemory] = useState<Record<string, Array<{ purpose: string; used_at: string }>>>({});
+  const [proposals, setProposals] = useState<ProposalItem[]>([]);
+  const [proposalMessage, setProposalMessage] = useState<string | null>(null);
+  const selectedPersonId = selectedPersonIds[0] ?? null;
 
   useEffect(() => {
     apiFetch<Person[]>('/persons')
       .then((list) => {
         setPeople(list);
-        if (list.length > 0) setSelectedPersonId(list[0].id);
+        if (list.length > 0) setSelectedPersonIds([list[0].id]);
       })
       .catch(() => setPeople([]));
+  }, []);
+
+  useEffect(() => {
+    apiFetch<MemoryPreferences>('/ai/memory-preferences').then(setMemoryPreferences).catch(() => undefined);
+    reloadProposals();
   }, []);
 
   useEffect(() => {
@@ -104,7 +167,7 @@ export default function AiPage() {
 
   async function handleAsk(e: React.FormEvent) {
     e.preventDefault();
-    if (!question.trim() || !selectedPersonId) return;
+    if (!question.trim() || selectedPersonIds.length === 0) return;
     const asked = question;
     setQuestion('');
     setLoading(true);
@@ -112,7 +175,7 @@ export default function AiPage() {
     try {
       const answer = await apiFetch<AiAnswer>('/ai/ask', {
         method: 'POST',
-        body: JSON.stringify({ question: asked, subjectPersonIds: [selectedPersonId] }),
+        body: JSON.stringify({ question: asked, subjectPersonIds: selectedPersonIds }),
       });
       setTurns((prev) => prev.map((t, i) => (i === prev.length - 1 ? { ...t, answer } : t)));
     } catch (err) {
@@ -164,6 +227,131 @@ export default function AiPage() {
     }
   }
 
+  async function handleCorrectMemory(memory: MemoryItem) {
+    const corrected = window.prompt('Corrija a informação que a ZELII deve lembrar:', memory.summary);
+    if (!corrected?.trim() || corrected.trim() === memory.summary) return;
+    if (!window.confirm('Confirmar esta correção e substituir a memória anterior?')) return;
+    setMemoryError(null);
+    try {
+      await apiFetch(`/ai/memory/${memory.id}/correct`, {
+        method: 'POST',
+        body: JSON.stringify({ summary: corrected.trim(), normalizedContent: {}, confirmed: true }),
+      });
+      setMemoryReloadKey((key) => key + 1);
+    } catch (err) {
+      setMemoryError(err instanceof Error ? err.message : 'Não foi possível corrigir esta memória.');
+    }
+  }
+
+  async function handleShowUsage(memory: MemoryItem) {
+    if (usageByMemory[memory.id]) {
+      setUsageByMemory((current) => {
+        const next = { ...current };
+        delete next[memory.id];
+        return next;
+      });
+      return;
+    }
+    try {
+      const usage = await apiFetch<Array<{ purpose: string; used_at: string }>>(`/ai/memory/${memory.id}/usage`);
+      setUsageByMemory((current) => ({ ...current, [memory.id]: usage }));
+    } catch (err) {
+      setMemoryError(err instanceof Error ? err.message : 'Não foi possível consultar o uso desta memória.');
+    }
+  }
+
+  async function handlePreferenceChange(patch: Partial<MemoryPreferences>) {
+    if (!memoryPreferences) return;
+    const next = { ...memoryPreferences, ...patch };
+    setMemoryPreferences(next);
+    try {
+      const saved = await apiFetch<MemoryPreferences>('/ai/memory-preferences', {
+        method: 'PATCH',
+        body: JSON.stringify({
+          memoryEnabled: next.memory_enabled,
+          proactiveEnabled: next.proactive_enabled,
+          explanationDetail: next.explanation_detail,
+          quietHoursStart: next.quiet_hours_start,
+          quietHoursEnd: next.quiet_hours_end,
+        }),
+      });
+      setMemoryPreferences(saved);
+    } catch (err) {
+      setMemoryError(err instanceof Error ? err.message : 'Não foi possível atualizar as preferências.');
+    }
+  }
+
+  async function handleExportMemory() {
+    if (!selectedPersonId) return;
+    try {
+      const exported = await apiFetch<Record<string, unknown>>(
+        `/ai/memory-export?subjectPersonId=${encodeURIComponent(selectedPersonId)}`,
+      );
+      const blob = new Blob([JSON.stringify(exported, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `zelii-memoria-${selectedPersonId}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setMemoryError(err instanceof Error ? err.message : 'Não foi possível exportar a memória.');
+    }
+  }
+
+  async function reloadProposals() {
+    try {
+      setProposals(await apiFetch<ProposalItem[]>('/ai/proposals'));
+    } catch {
+      setProposals([]);
+    }
+  }
+
+  async function handlePrepareAction(alternative: DecisionAlternative, answer: AiAnswer) {
+    if (!alternative.proposedActionType || !selectedPersonId) return;
+    setProposalMessage(null);
+    const isTask = ['PROPOSE_TASK', 'PROPOSE_REMINDER', 'PROPOSE_PREPARATION_CHECKLIST'].includes(
+      alternative.proposedActionType,
+    );
+    const proposedData = isTask
+      ? { subjectPersonId: selectedPersonId, title: alternative.title, description: alternative.impact }
+      : { subjectPersonId: selectedPersonId, note: alternative.title };
+    const uncertainFields = isTask ? [] : ['pessoa destinatária', 'horário ou recurso relacionado'];
+    try {
+      await apiFetch('/ai/proposals', {
+        method: 'POST',
+        body: JSON.stringify({
+          type: alternative.proposedActionType,
+          subjectPersonIds: selectedPersonIds,
+          proposedData,
+          factIds: answer.decision?.sources.map((source) => source.factId) ?? [],
+          uncertainFields,
+          expectedEffects: [alternative.impact],
+          informationToShare: alternative.informationShared,
+          idempotencyKey: `${alternative.id}:${selectedPersonIds.join(':')}`.slice(0, 120),
+        }),
+      });
+      setProposalMessage('Proposta preparada. Nada foi enviado ou executado.');
+      await reloadProposals();
+    } catch (err) {
+      setProposalMessage(err instanceof Error ? err.message : 'Não foi possível preparar a proposta.');
+    }
+  }
+
+  async function handleProposalTransition(proposal: ProposalItem, action: 'confirm' | 'reject' | 'execute') {
+    const confirmed = action !== 'reject';
+    if (confirmed && !window.confirm(action === 'execute' ? 'Executar a ação confirmada agora?' : 'Confirmar esta proposta para revisão final?')) return;
+    try {
+      await apiFetch(`/ai/proposals/${proposal.id}/${action}`, {
+        method: 'POST',
+        body: JSON.stringify({ expectedVersion: proposal.version, confirmed }),
+      });
+      await reloadProposals();
+    } catch (err) {
+      setProposalMessage(err instanceof Error ? err.message : 'Não foi possível atualizar a proposta.');
+    }
+  }
+
   return (
     <div className="max-w-2xl">
       <PageHeader
@@ -171,7 +359,7 @@ export default function AiPage() {
         description="Pergunte sobre a agenda, saúde ou escola — só o que você tem autorização para ver."
         actions={
           people && people.length > 1 ? (
-            <Select className="w-auto" value={selectedPersonId ?? ''} onChange={(e) => setSelectedPersonId(e.target.value)}>
+            <Select className="w-auto" value={selectedPersonId ?? ''} onChange={(e) => setSelectedPersonIds([e.target.value])} aria-label="Pessoa principal">
               {people.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.display_name}
@@ -182,9 +370,36 @@ export default function AiPage() {
         }
       />
 
+      {people && people.length > 1 && (
+        <fieldset className="mt-5 rounded-xl border border-border bg-surface p-4">
+          <legend className="px-1 text-sm font-semibold text-ink">Pessoas consideradas na resposta</legend>
+          <div className="mt-2 flex flex-wrap gap-3">
+            {people.map((person) => (
+              <label key={person.id} className="flex items-center gap-2 text-sm text-ink">
+                <input
+                  type="checkbox"
+                  checked={selectedPersonIds.includes(person.id)}
+                  onChange={(event) =>
+                    setSelectedPersonIds((current) =>
+                      event.target.checked
+                        ? [...new Set([...current, person.id])]
+                        : current.length > 1
+                          ? current.filter((id) => id !== person.id)
+                          : current,
+                    )
+                  }
+                  className="h-4 w-4 accent-primary"
+                />
+                {person.display_name}
+              </label>
+            ))}
+          </div>
+        </fieldset>
+      )}
+
       <details className="mt-8 rounded-xl border border-border bg-surface p-4 open:shadow-sm">
         <summary className="cursor-pointer font-semibold text-ink">
-          O que a ZELII pode lembrar
+          Memória da ZELII
           <span className="ml-2 text-sm font-normal text-inkMuted">
             {memories === null ? 'carregando…' : `${memories.length} ${memories.length === 1 ? 'memória ativa' : 'memórias ativas'}`}
           </span>
@@ -193,6 +408,46 @@ export default function AiPage() {
           A memória é usada nas próximas respostas somente quando você tem permissão para acessar a pessoa e o assunto.
           A conversa não é salva automaticamente: confirme abaixo apenas o que deve permanecer.
         </p>
+
+        {memoryPreferences && (
+          <div className="mt-4 grid gap-3 rounded-lg bg-background p-3 sm:grid-cols-2">
+            <label className="flex items-center gap-2 text-sm text-ink">
+              <input
+                type="checkbox"
+                checked={memoryPreferences.memory_enabled}
+                onChange={(event) => handlePreferenceChange({ memory_enabled: event.target.checked })}
+                className="h-4 w-4 accent-primary"
+              />
+              Usar memória personalizada
+            </label>
+            <label className="flex items-center gap-2 text-sm text-ink">
+              <input
+                type="checkbox"
+                checked={memoryPreferences.proactive_enabled}
+                onChange={(event) => handlePreferenceChange({ proactive_enabled: event.target.checked })}
+                className="h-4 w-4 accent-primary"
+              />
+              Permitir sugestões proativas
+            </label>
+            <label className="text-sm text-ink">
+              Nível de explicação
+              <Select
+                value={memoryPreferences.explanation_detail}
+                onChange={(event) => handlePreferenceChange({ explanation_detail: event.target.value as MemoryPreferences['explanation_detail'] })}
+                className="mt-1 w-full"
+              >
+                <option value="CONCISE">Conciso</option>
+                <option value="BALANCED">Equilibrado</option>
+                <option value="DETAILED">Detalhado</option>
+              </Select>
+            </label>
+            <div className="flex items-end">
+              <Button type="button" size="sm" variant="secondary" onClick={handleExportMemory} disabled={!selectedPersonId}>
+                Exportar memória autorizada
+              </Button>
+            </div>
+          </div>
+        )}
 
         {memoryError && <p className="mt-3 text-sm text-critical" role="alert">{memoryError}</p>}
 
@@ -205,11 +460,22 @@ export default function AiPage() {
                   <p className="mt-1 text-xs text-inkMuted">
                     {MEMORY_DOMAINS.find(([value]) => value === memory.domain)?.[1] ?? memory.domain}
                     {memory.valid_until ? ` · válida até ${new Date(memory.valid_until).toLocaleDateString('pt-BR')}` : ' · sem prazo definido'}
+                    {memory.last_verified_at ? ` · verificada em ${new Date(memory.last_verified_at).toLocaleDateString('pt-BR')}` : ''}
+                    {memory.usage_count ? ` · usada ${memory.usage_count}x` : ''}
                   </p>
+                  {usageByMemory[memory.id] && (
+                    <p className="mt-2 text-xs text-inkMuted">
+                      {usageByMemory[memory.id].length === 0
+                        ? 'Esta memória ainda não foi usada em respostas.'
+                        : `Último uso: ${new Date(usageByMemory[memory.id][0].used_at).toLocaleString('pt-BR')} (${usageByMemory[memory.id][0].purpose}).`}
+                    </p>
+                  )}
                 </div>
-                <Button type="button" size="sm" variant="ghost" onClick={() => handleRevokeMemory(memory)}>
-                  Esquecer
-                </Button>
+                <div className="flex flex-wrap gap-1">
+                  <Button type="button" size="sm" variant="ghost" onClick={() => handleShowUsage(memory)}>Por que foi usada?</Button>
+                  <Button type="button" size="sm" variant="ghost" onClick={() => handleCorrectMemory(memory)}>Corrigir</Button>
+                  <Button type="button" size="sm" variant="ghost" onClick={() => handleRevokeMemory(memory)}>Esquecer</Button>
+                </div>
               </li>
             ))}
           </ul>
@@ -254,7 +520,7 @@ export default function AiPage() {
             />
             <span>Confirmo que esta informação está correta e autorizo a ZELII a usá-la para auxiliar futuras decisões.</span>
           </label>
-          <Button type="submit" size="sm" disabled={memorySaving || !memorySummary.trim() || !memoryConfirmed || !selectedPersonId}>
+          <Button type="submit" size="sm" disabled={memorySaving || !memorySummary.trim() || !memoryConfirmed || !selectedPersonId || memoryPreferences?.memory_enabled === false}>
             {memorySaving ? 'Salvando…' : 'Guardar na memória'}
           </Button>
         </form>
@@ -273,7 +539,73 @@ export default function AiPage() {
             {turn.error && <p className="mt-3 text-sm text-critical" role="alert">{turn.error}</p>}
             {turn.answer && (
               <div className="mt-3 space-y-3">
-                <p className="whitespace-pre-line text-sm text-inkMuted">{turn.answer.text}</p>
+                {turn.answer.decision ? (
+                  <div className="space-y-4">
+                    <section>
+                      <h2 className="text-xs font-semibold uppercase tracking-wide text-inkMuted">Situação</h2>
+                      <p className="mt-1 whitespace-pre-line text-sm text-ink">{turn.answer.decision.situation}</p>
+                    </section>
+                    {turn.answer.decision.attention.length > 0 && (
+                      <section>
+                        <h2 className="text-xs font-semibold uppercase tracking-wide text-inkMuted">Por que precisa de atenção</h2>
+                        <ul className="mt-2 space-y-2">
+                          {turn.answer.decision.attention.map((attention) => (
+                            <li key={`${attention.ruleId}:${attention.text}`} className={`rounded-lg border p-3 text-sm ${attention.severity === 'BLOCKING' ? 'border-critical/30 bg-critical/5 text-critical' : 'border-warning/30 bg-warning/5 text-ink'}`}>
+                              {attention.text}
+                              <span className="mt-1 block text-xs text-inkMuted">Cálculo: {attention.ruleId}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </section>
+                    )}
+                    {turn.answer.decision.alternatives.length > 0 && (
+                      <section>
+                        <h2 className="text-xs font-semibold uppercase tracking-wide text-inkMuted">Alternativas</h2>
+                        <div className="mt-2 space-y-2">
+                          {turn.answer.decision.alternatives.map((alternative) => (
+                            <div key={alternative.id} className="rounded-lg border border-border p-3">
+                              <p className="text-sm font-semibold text-ink">{alternative.title}</p>
+                              <p className="mt-1 text-sm text-inkMuted">{alternative.impact}</p>
+                              {alternative.uncertainty && <p className="mt-1 text-xs text-warning">Incerteza: {alternative.uncertainty}</p>}
+                              {alternative.proposedActionType && (
+                                <Button type="button" size="sm" variant="secondary" className="mt-3" onClick={() => handlePrepareAction(alternative, turn.answer!)}>
+                                  Preparar — não enviar
+                                </Button>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </section>
+                    )}
+                    {turn.answer.decision.suggestion && (
+                      <section className="rounded-lg bg-primary/5 p-3">
+                        <h2 className="text-xs font-semibold uppercase tracking-wide text-primary">Sugestão da ZELII</h2>
+                        <p className="mt-1 text-sm text-ink">{turn.answer.decision.suggestion.text}</p>
+                        <p className="mt-1 text-xs text-inkMuted">Critérios: {turn.answer.decision.suggestion.criteria.join(', ')}.</p>
+                      </section>
+                    )}
+                    <section>
+                      <h2 className="text-xs font-semibold uppercase tracking-wide text-inkMuted">Você decide</h2>
+                      <p className="mt-1 text-sm text-inkMuted">Nenhuma ação é enviada ou executada sem sua confirmação.</p>
+                    </section>
+                    <details className="rounded-lg border border-border p-3">
+                      <summary className="cursor-pointer text-sm font-medium text-ink">Fontes e escopo acessado</summary>
+                      <ul className="mt-2 space-y-2 text-xs text-inkMuted">
+                        {turn.answer.decision.sources.map((source) => (
+                          <li key={source.factId}>
+                            {source.label} — Fonte: {source.sourceType}
+                            {source.updatedAt ? `, atualizada em ${new Date(source.updatedAt).toLocaleString('pt-BR')}` : ''}
+                            {` · ${source.verificationStatus}`}
+                          </li>
+                        ))}
+                      </ul>
+                      <p className="mt-2 text-xs text-inkMuted">Domínios consultados: {turn.answer.decision.accessedScope.domains.join(', ') || 'nenhum'}.</p>
+                    </details>
+                    {turn.answer.decision.safetyNotice && <p className="text-xs text-warning">{turn.answer.decision.safetyNotice}</p>}
+                  </div>
+                ) : (
+                  <p className="whitespace-pre-line text-sm text-inkMuted">{turn.answer.text}</p>
+                )}
                 {turn.answer.suggestedAction && (
                   <div className="rounded-md border border-primary/30 bg-primary/5 p-3 text-sm text-ink">
                     Sugestão: {turn.answer.suggestedAction.type === 'PROPOSE_RESPONSIBILITY_ASSIGNMENT' ? 'criar uma solicitação de responsabilidade' : turn.answer.suggestedAction.type}
@@ -295,15 +627,46 @@ export default function AiPage() {
         ))}
       </div>
 
+      {(proposalMessage || proposals.length > 0) && (
+        <section className="mt-8">
+          <h2 className="text-lg font-semibold text-ink">Propostas preparadas</h2>
+          {proposalMessage && <p className="mt-2 text-sm text-inkMuted" role="status">{proposalMessage}</p>}
+          <div className="mt-3 space-y-2">
+            {proposals.map((proposal) => (
+              <Card key={proposal.id}>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-sm font-semibold text-ink">{proposal.proposal_type}</p>
+                    <p className="text-xs text-inkMuted">Estado: {proposal.status} · expira em {new Date(proposal.expires_at).toLocaleString('pt-BR')}</p>
+                    {proposal.uncertain_fields.length > 0 && <p className="mt-1 text-xs text-warning">Complete antes de executar: {proposal.uncertain_fields.join(', ')}.</p>}
+                  </div>
+                  <div className="flex gap-2">
+                    {proposal.status === 'READY_FOR_REVIEW' && (
+                      <>
+                        <Button type="button" size="sm" variant="secondary" onClick={() => handleProposalTransition(proposal, 'reject')}>Rejeitar</Button>
+                        <Button type="button" size="sm" onClick={() => handleProposalTransition(proposal, 'confirm')}>Confirmar</Button>
+                      </>
+                    )}
+                    {proposal.status === 'CONFIRMED' && proposal.uncertain_fields.length === 0 && (
+                      <Button type="button" size="sm" onClick={() => handleProposalTransition(proposal, 'execute')}>Executar ação confirmada</Button>
+                    )}
+                  </div>
+                </div>
+              </Card>
+            ))}
+          </div>
+        </section>
+      )}
+
       <form onSubmit={handleAsk} className="mt-6 flex gap-2">
         <Input
           value={question}
           onChange={(e) => setQuestion(e.target.value)}
           placeholder="Pergunte à ZELII..."
           className="flex-1"
-          disabled={loading || !selectedPersonId}
+          disabled={loading || selectedPersonIds.length === 0}
         />
-        <Button type="submit" disabled={loading || !question.trim() || !selectedPersonId}>
+        <Button type="submit" disabled={loading || !question.trim() || selectedPersonIds.length === 0}>
           Perguntar
         </Button>
       </form>
