@@ -25,7 +25,7 @@ function CadastroForm() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [confirmationSent, setConfirmationSent] = useState(false);
+  const [signUpRequested, setSignUpRequested] = useState(false);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -42,15 +42,13 @@ function CadastroForm() {
         },
       });
       if (signUpError) throw signUpError;
-      if (data.user && data.user.identities?.length === 0) {
-        throw new Error('Este e-mail já possui uma conta. Entre com sua senha ou recupere o acesso.');
-      }
       // With e-mail confirmation enabled Supabase intentionally returns no
-      // session. Calling our API at this point caused the registration bug:
-      // there was no bearer token yet. Bootstrap happens only after login,
-      // inside the onboarding wizard (or the invitation is accepted first).
+      // session. For an existing address it may also return an obfuscated user
+      // instead of revealing that the account exists. The UI must therefore be
+      // neutral: Supabase's unique e-mail constraint prevents a duplicate, and
+      // bootstrap happens only after a confirmed login.
       if (!data.session) {
-        setConfirmationSent(true);
+        setSignUpRequested(true);
         return;
       }
       const destination = returnTo === '/app/onboarding'
@@ -64,17 +62,35 @@ function CadastroForm() {
     }
   }
 
-  if (confirmationSent) {
+  if (signUpRequested) {
     return (
       <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-6">
-        <p className="text-sm font-medium text-primary">Conta criada</p>
-        <h1 className="mt-2 text-2xl font-semibold text-ink">Confirme seu e-mail</h1>
+        <p className="text-sm font-medium text-primary">Solicitação recebida</p>
+        <h1 className="mt-2 text-2xl font-semibold text-ink">Verifique sua caixa de entrada</h1>
         <p className="mt-3 text-sm text-inkMuted">
-          Enviamos um link para <strong className="text-ink">{email}</strong>. Depois da confirmação, você poderá continuar exatamente de onde parou.
+          Se <strong className="text-ink">{email}</strong> ainda não estiver cadastrado, enviaremos um link de confirmação. Depois de confirmar, você poderá continuar de onde parou.
         </p>
-        <Link href={buildAuthUrl('/entrar', returnTo)} className="mt-6 inline-flex min-h-11 items-center justify-center rounded-md bg-primary px-4 font-medium text-white">
-          Já confirmei — entrar
-        </Link>
+        <div className="mt-5 rounded-lg border border-border bg-surfaceMuted p-4 text-sm text-inkMuted">
+          Se você já usa a ZELII com esse e-mail, nenhum novo cadastro foi criado. Entre na conta existente ou recupere sua senha.
+        </div>
+        <div className="mt-6 flex flex-col gap-3">
+          <Link href={buildAuthUrl('/entrar', returnTo)} className="inline-flex min-h-11 items-center justify-center rounded-md bg-primary px-4 font-medium text-white">
+            Entrar na minha conta
+          </Link>
+          <Link href="/recuperar-senha" className="inline-flex min-h-11 items-center justify-center rounded-md border border-border bg-surface px-4 font-medium text-ink">
+            Esqueci minha senha
+          </Link>
+          <button
+            type="button"
+            className="min-h-11 text-sm font-medium text-primary underline-offset-2 hover:underline"
+            onClick={() => {
+              setPassword('');
+              setSignUpRequested(false);
+            }}
+          >
+            Usar outro e-mail
+          </button>
+        </div>
       </main>
     );
   }
