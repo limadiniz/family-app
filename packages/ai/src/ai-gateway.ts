@@ -38,6 +38,7 @@ export class AiGateway {
         availableActions: string[];
       }) => Promise<void>;
       aiEnabled: boolean;
+      timeZone?: string;
     },
   ) {}
 
@@ -54,6 +55,7 @@ export class AiGateway {
       retrieve: this.deps.retrieve,
       loadPolicyInput: this.deps.loadPolicyInput,
       loadSignals: this.deps.loadSignals,
+      timeZone: this.deps.timeZone,
     }).build(actor, question, subjectPersonIds);
 
     await this.deps.recordAudit({

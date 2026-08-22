@@ -27,7 +27,7 @@ function makeFakeSupabaseClient(responses: Record<string, { data: unknown; error
   }
   function from(table: string) {
     const builder: Record<string, unknown> = {};
-    for (const method of ['select', 'eq', 'is', 'in', 'order', 'gte', 'lte', 'limit', 'insert', 'update', 'upsert']) {
+    for (const method of ['select', 'eq', 'is', 'in', 'order', 'gte', 'lte', 'limit', 'insert', 'update', 'upsert', 'textSearch']) {
       builder[method] = (...args: unknown[]) => {
         queryCalls.push({ table, method, args });
         return builder;
@@ -38,7 +38,12 @@ function makeFakeSupabaseClient(responses: Record<string, { data: unknown; error
     builder['single'] = async () => resolveFor(table);
     return builder;
   }
-  return { client: { from }, queryCalls };
+  const rpc = async (name: string, ...args: unknown[]) => {
+    queryCalls.push({ table: name, method: 'rpc', args });
+    if (responses[name]) return resolveFor(name);
+    return { data: [{ allowed: true, remaining: 19, reset_at: '2026-08-22T12:01:00Z' }], error: null };
+  };
+  return { client: { from, rpc }, queryCalls };
 }
 
 const ANA: RequestActor = { authUserId: 'auth-ana', tenantId: 'tenant-1', personId: 'ana', bearerToken: 'token-ana' };
@@ -62,7 +67,7 @@ function makeService(opts: {
   const loadPolicyEngineInput = opts.loadPolicyEngineInput ?? vi.fn().mockResolvedValue(ALLOW_ALL_POLICY_INPUT);
   const authorizeOrThrow = opts.authorizeOrThrow ?? vi.fn().mockResolvedValue(undefined);
 
-  process.env.AI_ENABLED = String(opts.aiEnabled ?? true);
+  process.env.FF_AI_ENABLED = String(opts.aiEnabled ?? true);
 
   const service = new AiService(
     { forUser: () => client } as unknown as SupabaseService,
@@ -75,6 +80,7 @@ function makeService(opts: {
 afterEach(() => {
   vi.unstubAllGlobals();
   delete process.env.AI_ENABLED;
+  delete process.env.FF_AI_ENABLED;
   delete process.env.AI_PROVIDER_API_KEY;
   delete process.env.AI_MODEL;
 });
@@ -82,13 +88,50 @@ afterEach(() => {
 describe('AiService.ask — disabled', () => {
   it('returns the honest "not enabled" answer and never touches the database when AI_ENABLED=false', async () => {
     const { service, loadPolicyEngineInput } = makeService({ responses: {}, aiEnabled: false });
-    const answer = await service.ask(ANA, 'O que tenho amanhã?', ['pedro']);
+    const answer = await service.ask(ANA, 'O que tenho amanhã?');
     expect(answer.text).toContain('não está habilitado');
     expect(loadPolicyEngineInput).not.toHaveBeenCalled();
   });
 });
 
 describe('AiService.ask — enabled, no provider key configured (deterministic fallback)', () => {
+  it('derives every viewable family member on the server without receiving selected ids', async () => {
+    const { service, loadPolicyEngineInput } = makeService({
+      aiEnabled: true,
+      responses: {
+        persons: {
+          data: [
+            { id: 'person-1', display_name: 'Miguel' },
+            { id: 'person-2', display_name: 'Ana Liz' },
+          ],
+          error: null,
+        },
+        calendar_events: {
+          data: [{ id: 'e-family', title: 'Rotina', starts_at: '2026-08-23T10:00:00Z' }],
+          error: null,
+        },
+      },
+    });
+
+    const answer = await service.ask(ANA, 'O que temos na agenda?');
+
+    expect(answer.decision?.accessedScope.subjectPersonIds).toEqual(expect.arrayContaining(['person-1', 'person-2', 'ana']));
+    expect(loadPolicyEngineInput).toHaveBeenCalledWith(expect.anything(), 'person-1');
+    expect(loadPolicyEngineInput).toHaveBeenCalledWith(expect.anything(), 'person-2');
+  });
+
+  it('fails closed when the shared database rate limiter is unavailable', async () => {
+    const { service, loadPolicyEngineInput } = makeService({
+      aiEnabled: true,
+      responses: {
+        consume_ai_rate_limit: { data: null, error: { message: 'rpc unavailable' } },
+      },
+    });
+
+    await expect(service.ask(ANA, 'O que temos amanhã?')).rejects.toThrow(/limite de uso/i);
+    expect(loadPolicyEngineInput).not.toHaveBeenCalled();
+  });
+
   it('retrieves real SCHEDULE facts and returns a deterministic summary', async () => {
     const { service, auditRecord } = makeService({
       aiEnabled: true,
@@ -100,7 +143,7 @@ describe('AiService.ask — enabled, no provider key configured (deterministic f
       },
     });
 
-    const answer = await service.ask(ANA, 'O que tenho amanhã?', ['pedro']);
+    const answer = await service.ask(ANA, 'O que tenho amanhã?');
     expect(answer.text).toContain('Pediatra');
     expect(answer.facts).toHaveLength(1);
     expect(auditRecord).toHaveBeenCalledWith(ANA, expect.objectContaining({ eventType: 'AI_QUERY', result: 'SUCCESS' }));
@@ -128,7 +171,7 @@ describe('AiService.ask — enabled, no provider key configured (deterministic f
       },
     });
 
-    const answer = await service.ask(ANA, 'O que preciso lembrar para a atividade?', ['pedro']);
+    const answer = await service.ask(ANA, 'O que preciso lembrar para a atividade?');
     expect(answer.text).toContain('Memória confirmada');
     expect(answer.text).toContain('inalador');
     expect(answer.facts.some((fact) => fact.source.type === 'ai_memory_items')).toBe(true);
@@ -139,8 +182,38 @@ describe('AiService.ask — enabled, no provider key configured (deterministic f
       aiEnabled: true,
       responses: { calendar_events: { data: [], error: null } },
     });
-    const answer = await service.ask(ANA, 'O que tenho amanhã?', ['pedro']);
+    const answer = await service.ask(ANA, 'O que tenho amanhã?');
     expect(answer.text).toContain('Não encontrei');
+  });
+
+  it('uses Portuguese full-text retrieval for authorized school captures', async () => {
+    const { service, queryCalls } = makeService({
+      aiEnabled: true,
+      responses: {
+        calendar_events: { data: [], error: null },
+        capture_items: {
+          data: [{
+            id: 'capture-1',
+            raw_text: 'A autorização do passeio precisa ser entregue amanhã.',
+            source: 'TEXT',
+            status: 'CONFIRMED',
+            category: 'SCHOOL_ANNOUNCEMENT',
+            created_at: '2026-08-22T10:00:00Z',
+            updated_at: '2026-08-22T10:00:00Z',
+          }],
+          error: null,
+        },
+      },
+    });
+
+    const answer = await service.ask(ANA, 'Qual é o comunicado da escola?');
+
+    expect(answer.text).toContain('autorização do passeio');
+    expect(queryCalls).toContainEqual({
+      table: 'capture_items',
+      method: 'textSearch',
+      args: ['search_vector', 'Qual é o comunicado da escola?', { type: 'websearch', config: 'portuguese' }],
+    });
   });
 });
 
@@ -238,7 +311,15 @@ describe('AiService.ask — enabled, provider configured', () => {
   it('calls the Anthropic Messages API and returns its text', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ content: [{ type: 'text', text: 'Você tem consulta com o pediatra amanhã às 10h.' }] }),
+      json: async () => ({
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            answer: 'Você tem consulta com o pediatra amanhã às 10h.',
+            supportedFactIds: ['calendar_events:e1'],
+          }),
+        }],
+      }),
     });
     vi.stubGlobal('fetch', fetchMock);
     process.env.AI_PROVIDER_API_KEY = 'sk-test';
@@ -249,7 +330,7 @@ describe('AiService.ask — enabled, provider configured', () => {
       responses: { calendar_events: { data: [{ id: 'e1', title: 'Pediatra', starts_at: '2026-08-21T10:00:00Z', category: 'HEALTH' }], error: null } },
     });
 
-    const answer = await service.ask(ANA, 'O que tenho amanhã?', ['pedro']);
+    const answer = await service.ask(ANA, 'O que tenho amanhã?');
     expect(fetchMock).toHaveBeenCalledWith('https://api.anthropic.com/v1/messages', expect.objectContaining({ method: 'POST' }));
     expect(answer.text).toBe('Você tem consulta com o pediatra amanhã às 10h.');
   });
@@ -264,20 +345,26 @@ describe('AiService.ask — enabled, provider configured', () => {
       responses: { calendar_events: { data: [{ id: 'e1', title: 'Pediatra', starts_at: '2026-08-21T10:00:00Z', category: 'HEALTH' }], error: null } },
     });
 
-    const answer = await service.ask(ANA, 'O que tenho amanhã?', ['pedro']);
+    const answer = await service.ask(ANA, 'O que tenho amanhã?');
     expect(answer.text).toContain('Pediatra'); // deterministic fallback, not a thrown error
   });
 
   it('rejects unsafe medical output from the provider and uses the sourced fallback', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ content: [{ type: 'text', text: 'Aumente a dose e pare de tomar amanhã.' }] }),
+      json: async () => ({
+        content: [{
+          type: 'text',
+          text: JSON.stringify({ answer: 'Aumente a dose e pare de tomar amanhã.', supportedFactIds: ['health_profiles:h1'] }),
+        }],
+      }),
     }));
     process.env.AI_PROVIDER_API_KEY = 'sk-test';
+    process.env.AI_MODEL = 'claude-test';
     const { service } = makeService({
       responses: { health_profiles: { data: { id: 'h1', blood_type: 'O+', updated_at: '2026-08-20T10:00:00Z' }, error: null } },
     });
-    const answer = await service.ask(ANA, 'O que fazer sobre a saúde de Pedro?', ['pedro']);
+    const answer = await service.ask(ANA, 'O que fazer sobre a saúde de Pedro?');
     expect(answer.text).not.toContain('Aumente a dose');
     expect(answer.decision?.sources).toEqual([
       expect.objectContaining({ sourceType: 'health_profiles', verificationStatus: 'DECLARED' }),
@@ -291,9 +378,9 @@ describe('AiService.ask — Action Layer (§60)', () => {
       aiEnabled: true,
       responses: { calendar_events: { data: [{ id: 'e1', title: 'Pediatra', starts_at: '2026-08-21T10:00:00Z', category: 'HEALTH' }], error: null } },
     });
-    const answer = await service.ask(ANA, 'Quem pode buscar o Pedro na escola?', ['pedro']);
+    const answer = await service.ask(ANA, 'Quem pode buscar o Pedro na escola?');
     expect(answer.suggestedAction).toEqual(
-      expect.objectContaining({ type: 'PROPOSE_RESPONSIBILITY_ASSIGNMENT', payload: expect.objectContaining({ subjectPersonId: 'pedro' }) }),
+      expect.objectContaining({ type: 'PROPOSE_RESPONSIBILITY_ASSIGNMENT', payload: expect.objectContaining({ subjectPersonId: 'ana' }) }),
     );
   });
 
@@ -302,7 +389,7 @@ describe('AiService.ask — Action Layer (§60)', () => {
       aiEnabled: true,
       responses: { calendar_events: { data: [{ id: 'e1', title: 'Pediatra', starts_at: '2026-08-21T10:00:00Z', category: 'HEALTH' }], error: null } },
     });
-    const answer = await service.ask(ANA, 'O que tenho amanhã?', ['pedro']);
+    const answer = await service.ask(ANA, 'O que tenho amanhã?');
     expect(answer.suggestedAction).toBeUndefined();
   });
 });

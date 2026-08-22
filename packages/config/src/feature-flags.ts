@@ -20,7 +20,9 @@ function envBool(value: string | undefined, fallback: boolean): boolean {
 
 export function loadFeatureFlags(env: NodeJS.ProcessEnv = process.env): FeatureFlags {
   return featureFlagsSchema.parse({
-    AI_ENABLED: envBool(env.FF_AI_ENABLED, false),
+    // FF_AI_ENABLED is canonical. AI_ENABLED remains a backwards-compatible
+    // alias while existing production environments are migrated.
+    AI_ENABLED: envBool(env.FF_AI_ENABLED ?? env.AI_ENABLED, false),
     OCR_ENABLED: envBool(env.FF_OCR_ENABLED, false),
     FINANCE_ENABLED: envBool(env.FF_FINANCE_ENABLED, true),
     TEEN_ACCESS_ENABLED: envBool(env.FF_TEEN_ACCESS_ENABLED, true),

@@ -17,4 +17,9 @@ describe('loadFeatureFlags', () => {
     expect(flags.AI_ENABLED).toBe(true);
     expect(flags.FINANCE_ENABLED).toBe(false);
   });
+
+  it('keeps AI_ENABLED as a backward-compatible alias while FF_AI_ENABLED is canonical', () => {
+    expect(loadFeatureFlags({ AI_ENABLED: 'true' }).AI_ENABLED).toBe(true);
+    expect(loadFeatureFlags({ AI_ENABLED: 'true', FF_AI_ENABLED: 'false' }).AI_ENABLED).toBe(false);
+  });
 });

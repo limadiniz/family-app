@@ -9,6 +9,9 @@ import type { PolicyActor } from '@family-app/policy-engine';
 export interface RetrievalRequest {
   domain: PermissionDomain;
   subjectPersonId: string;
+  timeWindow?: { startsAt: string; endsAt: string };
+  /** Original question, used only by authorized lexical retrieval. */
+  query?: string;
 }
 
 export interface RetrievedFact {
@@ -162,7 +165,7 @@ export interface AiAnswer {
 /** Retrieval is delegated to the caller (apps/api) — the AI package never queries Postgres directly. */
 export type RetrievalFn = (request: RetrievalRequest) => Promise<RetrievedFact[]>;
 
-/** LLM call is delegated too — no provider SDK is wired in Phase 0/1 (AI_ENABLED=false by default). */
+/** LLM completion is delegated to apps/api so provider credentials never enter this package or a client. */
 export type LlmCompletionFn = (input: {
   question: string;
   facts: AuthorizedFact[];

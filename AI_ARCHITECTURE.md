@@ -1,71 +1,111 @@
-# AI_ARCHITECTURE.md
+# Arquitetura de IA da ZELII
 
-## Status
+## Estado atual
 
-Structural implementation only (Phase 0/1 deliverable). `AI_ENABLED` feature flag defaults to `false`
-(`packages/config/src/feature-flags.ts`); no LLM provider is called yet. What exists today is the part that
-matters most for safety: the Gateway shape that makes it *impossible* for a question to reach a model without
-first clearing the Family Policy Engine, per domain, per subject.
+A ZELII possui um assistente de decisão familiar com recuperação autorizada, memória confirmada pelo usuário,
+sinais determinísticos, respostas com fontes e ações supervisionadas. A flag canônica é `FF_AI_ENABLED`
+(`AI_ENABLED` permanece apenas como alias de compatibilidade). Sem provedor configurado, o produto continua
+funcionando em modo determinístico e não inventa uma resposta.
 
-## The mandatory path
+| Capacidade | Estado | Implementação / limite |
+| --- | --- | --- |
+| RAG estruturado | Ativo | Agenda, escola, saúde, medicamentos, documentos, atividades e memória autorizada |
+| Busca lexical | Ativa | PostgreSQL full-text em português para capturas e memórias |
+| Busca vetorial | Desativada | Depende de provedor de embeddings aprovado, reindexação e propagação de exclusão |
+| Multi-index | Parcial | Combina índices transacionais e textuais; falta o índice vetorial |
+| Cache semântico | Desativado | Falta versionamento/invalidação segura por fonte e política |
+| Memória | Ativa e governada | Opt-in, por pessoa/domínio, corrigível, revogável e auditável |
+| Uso de ferramentas | Ativo e supervisionado | Registro fechado; toda escrita nasce como proposta e exige confirmação |
+| Agentes autônomos / reflection loops | Desativados | Ações familiares não podem ser executadas em loops autônomos |
+| MCP externo | Desativado | Nenhum conector ou credencial foi aprovado/configurado |
+| Fine-tuning | Não utilizado | Primeiro devem existir avaliações, consentimento e dataset anonimizado |
+| Voz | Ativa no web compatível | Web Speech API; a API da ZELII recebe somente o texto reconhecido |
 
-```
-User question (web/mobile)
-        │  (bearer token only — no LLM key, no DB access from the client)
+## Caminho obrigatório de uma pergunta
+
+```text
+Pergunta por texto ou transcrição de voz
+        │
         ▼
-apps/api  ──►  AiGateway.ask(actor, question, subjectPersonIds)   [packages/ai]
-        │
-        ├─ resolveIntentDomains(question)   → which PermissionDomains are implicated
-        │     (keyword heuristic today — §128 ASSUMPTION; Phase 6 upgrades this to an
-        │      LLM-assisted classifier, WITHOUT changing anything below this line)
-        │
-        ├─ for each (domain, subjectPersonId):
-        │      FamilyPolicyEngine.authorize(...)  →  ALLOW | DENY | REQUIRE_CONFIRMATION
-        │      ── only on ALLOW does `retrieve()` ever get called ──
-        │
-        ├─ retrieve() — scoped fetch, delegated to apps/api (never inside packages/ai itself)
-        ├─ complete() — LLM call, delegated (no provider SDK wired yet)
-        └─ recordAudit() — always, regardless of outcome (AI_QUERY / AI_ACTION events, §26)
+API autenticada
+        ├── limite atômico por usuário no PostgreSQL
+        ├── recompõe todas as pessoas visíveis da família no servidor
+        ├── resolve intenção e janela temporal
+        ├── autoriza cada par pessoa + domínio no Family Policy Engine
+        ├── recupera somente campos mínimos de fontes estruturadas/textuais
+        ├── gera sinais determinísticos (conflito, transporte, preparação)
+        ├── chama o provedor com timeout e contrato JSON, se configurado
+        ├── valida IDs de fontes e conteúdo de risco
+        ├── usa fallback determinístico em falha ou saída inválida
+        └── registra telemetria sem pergunta, prompt ou resposta bruta
 ```
 
-This is enforced structurally, not just by convention: `AiGateway`'s constructor requires a `loadPolicyInput`
-and calls `FamilyPolicyEngine.authorize` inline before ever invoking the injected `retrieve` function — see
-`packages/ai/src/ai-gateway.ts`. `packages/ai/test/ai-gateway.test.ts` proves the exact scenario from §135:
-a GUARDIAN asking "quando Pedro tem consulta?" gets an answer with a source; a babá asking for Pedro's full
-medical history with no grant gets a denial, and `retrieve()`/`complete()` are never called at all.
+O navegador não seleciona nem envia IDs de pessoas para `/ai/ask`. A API calcula o escopo de toda a família a
+cada pergunta, aplica RLS e revalida `VIEW/PROFILE`; depois o Gateway autoriza novamente o domínio específico
+antes da recuperação. Assim, considerar toda a família não significa ampliar permissões.
 
-## §54's prohibition, satisfied by construction
+## Recuperação, fontes e minimização
 
-"Nunca permitir mobile/web → LLM → database": `apps/web` and `apps/mobile` never hold `AI_PROVIDER_API_KEY` or
-`SUPABASE_SERVICE_ROLE_KEY`. The only network calls they make are to Supabase Auth (session management) and to
-`apps/api` (bearer-token authenticated). `AiGateway` lives inside `apps/api`'s dependency graph only.
+Cada fato possui identidade estável (`tipo:id`), pessoa, domínio, proveniência, estado de verificação e data da
+fonte. Consultas temporais como “hoje”, “amanhã” e “esta semana” limitam a janela lida. O contexto é limitado por
+pessoa e no total antes de chegar ao modelo.
 
-## Sources (§56)
+A busca atual é híbrida em dois níveis:
 
-`RetrievedFact.source` (`packages/ai/src/types.ts`) is mandatory on every fact the gateway assembles — the
-answer text is built from facts that each carry a `{ type, id, occurredAt }` pointer back to the record that
-justified them, so the eventual UI can always render "Fonte: Consulta pediátrica registrada em 03/08/2026"
-rather than an unsourced claim.
+1. filtros estruturados nos registros operacionais;
+2. full-text search em português nas capturas e memórias autorizadas.
 
-## Guardrails for medical content (§40)
+O índice vetorial só deve ser adicionado quando houver:
 
-Not yet reachable (no LLM wired), but the constraint is recorded here so Phase 6 implements it correctly: the
-AI may organize, summarize, and explain in general terms information already recorded by a human, and it may
-remind about a registered treatment — it must never diagnose as fact, alter a dose, suggest compensating a
-missed dose, suggest suspending treatment, or modify a prescription. This is a prompt-level and
-output-validation concern for Phase 6, not something `packages/ai`'s current scaffolding can violate today
-simply because it doesn't call a model yet.
+- embeddings aprovados para dados potencialmente sensíveis;
+- separação obrigatória por tenant, pessoa e domínio antes da similaridade;
+- versionamento da fonte e reindexação;
+- exclusão/revogação propagada ao índice e ao cache;
+- avaliações de recuperação, vazamento e relevância.
 
-## Confirmation loop for AI-suggested actions (§57)
+## Modelo e proteção contra prompt injection
 
-Any AI-suggested write (e.g. "quer adicionar essa consulta à agenda?") must, once implemented, go through the
-exact same `PolicyService.authorizeOrThrow(..., { confirmed: true })` path a human-initiated action would —
-there is no separate, weaker "AI action" authorization path. `AiAnswer.suggestedAction` (`packages/ai/src/types.ts`)
-is a proposal only; executing it is deliberately left to a normal, auditable API call, never performed
-automatically by the Gateway itself.
+O provedor recebe somente fatos já autorizados e minimizados dentro de um bloco marcado como conteúdo não
+confiável. A saída deve obedecer ao contrato JSON `answer + supportedFactIds`; IDs desconhecidos, JSON inválido,
+respostas médicas perigosas, falha de rede ou timeout acionam o resumo determinístico. Quando há fatos, pelo
+menos uma fonte recebida deve sustentar a resposta.
 
-## Event Bus for proactive AI (§58)
+## Memória
 
-Not implemented in Phase 0/1. `packages/domain`'s event-shaped concerns (conflicts, medication due, document
-expiring) are named in ARCHITECTURE.md's phase table; wiring a real event bus is a Phase 2-3 dependency
-(notifications) that Phase 6's proactive AI will subscribe to.
+A conversa não vira memória automaticamente. Uma memória exige confirmação explícita, pessoa, domínio,
+finalidade e, quando aplicável, validade. Ela pode ser inspecionada, exportada, corrigida por substituição ou
+revogada. A recuperação falha de modo fechado quando não é possível validar a preferência de memória.
+
+## Ferramentas e ações
+
+`packages/ai/src/tool-registry.ts` é o registro fechado das ferramentas de ação. Cada definição possui risco,
+autorizações exigidas e `PROPOSAL_ONLY`. O fluxo é:
+
+```text
+sugestão → proposta revisável → confirmação explícita → nova autorização → serviço de domínio → auditoria
+```
+
+O modelo não escolhe permissões e nunca chama diretamente tabelas ou serviços de escrita. Operações sensíveis,
+como passagem de cuidado, resumo de saúde e atribuição de responsabilidade, são classificadas como tal.
+
+## Voz e privacidade
+
+O site usa o mecanismo de reconhecimento de fala oferecido pelo navegador, em `pt-BR`. A transcrição aparece no
+campo para revisão e só é enviada ao tocar em **Perguntar**. A ZELII não recebe nem armazena o áudio neste fluxo;
+o processamento do áudio pelo navegador ou seu fornecedor depende do dispositivo e das políticas desse
+fornecedor. Se o recurso ou a permissão de microfone não estiver disponível, a entrada por texto permanece.
+
+## Observabilidade e governança
+
+`ai_runs` registra provedor, modelo, versão do prompt, resultado, latência, quantidade de pessoas, domínios e
+referências das fontes. Pergunta, prompt, resposta e conteúdo médico bruto são deliberadamente excluídos. O
+limite de uso é compartilhado entre réplicas da API por uma função atômica no banco e falha de modo fechado.
+
+## Próximas etapas condicionadas
+
+1. Criar conjunto de avaliações de relevância, groundedness, autorização e segurança médica com dados sintéticos.
+2. Aprovar um provedor de embeddings e política LGPD antes de ativar `pgvector`.
+3. Implementar cache somente com fingerprint de política e versões das fontes, invalidando em alteração/revogação.
+4. Conectar MCP apenas por adaptadores allowlisted, credenciais de menor privilégio e proposta obrigatória para writes.
+5. Considerar fine-tuning apenas se as avaliações provarem que prompt + RAG não atendem, usando dataset consentido e anonimizado.
+6. Manter qualquer planejamento iterativo com limite rígido de passos e sem execução autônoma de efeitos externos.

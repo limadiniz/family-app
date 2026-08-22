@@ -1,6 +1,6 @@
 import { FamilyPolicyEngine, type PolicyActor, type PolicyEngineInput } from '@family-app/policy-engine';
 import type { PermissionDomain } from '@family-app/domain';
-import { buildRetrievalRequests, resolveIntentDomains } from './intent';
+import { buildRetrievalRequests, resolveIntentDomains, resolveTimeWindow } from './intent';
 import type {
   AuthorizedFact,
   DecisionAlternative,
@@ -25,6 +25,7 @@ export interface DecisionContextBuilderDeps {
     timeWindow?: { startsAt: string; endsAt: string };
   }) => Promise<DecisionSignal[]>;
   now?: () => Date;
+  timeZone?: string;
 }
 
 export class DecisionContextBuilder {
@@ -33,7 +34,8 @@ export class DecisionContextBuilder {
   constructor(private readonly deps: DecisionContextBuilderDeps) {}
 
   async build(actor: PolicyActor, question: string, subjectPersonIds: string[]): Promise<DecisionContext> {
-    const requests = buildRetrievalRequests(question, [...new Set(subjectPersonIds)]);
+    const timeWindow = resolveTimeWindow(question, this.deps.now?.() ?? new Date(), this.deps.timeZone);
+    const requests = buildRetrievalRequests(question, [...new Set(subjectPersonIds)], timeWindow);
     const authorizedFacts: AuthorizedFact[] = [];
     const allowedDomains = new Set<PermissionDomain>();
     const deniedDomains = new Set<PermissionDomain>();
@@ -66,12 +68,14 @@ export class DecisionContextBuilder {
         decisionRule: decision.rule,
       });
       const retrieved = await this.deps.retrieve(request);
-      authorizedFacts.push(
-        ...retrieved.map((fact) => normalizeFact(fact, decision.rule)),
-      );
+      const remainingBudget = 60 - authorizedFacts.length;
+      if (remainingBudget > 0) {
+        authorizedFacts.push(
+          ...retrieved.slice(0, Math.min(12, remainingBudget)).map((fact) => normalizeFact(fact, decision.rule)),
+        );
+      }
     }
 
-    const timeWindow = resolveTimeWindow(question, this.deps.now?.() ?? new Date());
     const allowed = [...allowedDomains];
     const deterministicSignals = this.deps.loadSignals
       ? await this.deps.loadSignals({
@@ -118,24 +122,6 @@ function normalizeFact(
     },
     verificationStatus,
   };
-}
-
-function resolveTimeWindow(question: string, now: Date): { startsAt: string; endsAt: string } | undefined {
-  const lower = question.toLowerCase();
-  const start = new Date(now);
-  start.setUTCHours(0, 0, 0, 0);
-  const end = new Date(start);
-  if (lower.includes('amanhã')) {
-    start.setUTCDate(start.getUTCDate() + 1);
-    end.setUTCDate(start.getUTCDate() + 1);
-  } else if (lower.includes('semana')) {
-    end.setUTCDate(start.getUTCDate() + 7);
-  } else if (lower.includes('hoje')) {
-    end.setUTCDate(start.getUTCDate() + 1);
-  } else {
-    return undefined;
-  }
-  return { startsAt: start.toISOString(), endsAt: end.toISOString() };
 }
 
 function resolveAvailableActions(domains: PermissionDomain[], signals: DecisionSignal[]): ProposedActionType[] {

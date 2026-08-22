@@ -35,8 +35,8 @@ export class AiController {
   }
 
   @Post('ask')
-  ask(@CurrentActor() actor: RequestActor, @Body() body: { question: string; subjectPersonIds: string[] }) {
-    return this.service.ask(actor, body.question, body.subjectPersonIds);
+  ask(@CurrentActor() actor: RequestActor, @Body() body: { question: string }) {
+    return this.service.ask(actor, body.question);
   }
 
   @Get('capabilities')

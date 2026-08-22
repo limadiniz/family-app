@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { apiFetch } from '@/lib/api-client';
 import { PageHeader, Select, Input, Button, Card } from '@/components/ui';
 
@@ -136,6 +136,29 @@ const VERIFICATION_LABELS: Record<string, string> = {
   OUTDATED: 'pode estar desatualizada',
 };
 
+interface BrowserSpeechRecognition {
+  lang: string;
+  continuous: boolean;
+  interimResults: boolean;
+  start(): void;
+  stop(): void;
+  abort(): void;
+  onresult: ((event: { results: ArrayLike<{ 0: { transcript: string }; isFinal: boolean }> }) => void) | null;
+  onerror: ((event: { error: string }) => void) | null;
+  onend: (() => void) | null;
+}
+
+type BrowserSpeechRecognitionConstructor = new () => BrowserSpeechRecognition;
+
+function speechRecognitionConstructor(): BrowserSpeechRecognitionConstructor | undefined {
+  if (typeof window === 'undefined') return undefined;
+  const speechWindow = window as typeof window & {
+    SpeechRecognition?: BrowserSpeechRecognitionConstructor;
+    webkitSpeechRecognition?: BrowserSpeechRecognitionConstructor;
+  };
+  return speechWindow.SpeechRecognition ?? speechWindow.webkitSpeechRecognition;
+}
+
 function ruleLabel(ruleId: string): string {
   if (ruleId.endsWith(':MISSING_TRANSPORT')) return 'Transporte ainda não definido';
   if (ruleId.endsWith(':SIMULTANEOUS_EVENTS')) return 'Horários sobrepostos';
@@ -154,6 +177,7 @@ function ruleLabel(ruleId: string): string {
 export default function AiPage() {
   const [people, setPeople] = useState<Person[] | null>(null);
   const [selectedPersonIds, setSelectedPersonIds] = useState<string[]>([]);
+  const [memoryPersonId, setMemoryPersonId] = useState<string | null>(null);
   const [question, setQuestion] = useState('');
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [loading, setLoading] = useState(false);
@@ -170,15 +194,25 @@ export default function AiPage() {
   const [usageByMemory, setUsageByMemory] = useState<Record<string, Array<{ purpose: string; used_at: string }>>>({});
   const [proposals, setProposals] = useState<ProposalItem[]>([]);
   const [proposalMessage, setProposalMessage] = useState<string | null>(null);
-  const selectedPersonId = selectedPersonIds[0] ?? null;
+  const [voiceSupported, setVoiceSupported] = useState<boolean | null>(null);
+  const [voiceListening, setVoiceListening] = useState(false);
+  const [voiceMessage, setVoiceMessage] = useState<string | null>(null);
+  const recognitionRef = useRef<BrowserSpeechRecognition | null>(null);
+  const selectedPersonId = memoryPersonId ?? selectedPersonIds[0] ?? null;
 
   useEffect(() => {
     apiFetch<Person[]>('/persons')
       .then((list) => {
         setPeople(list);
-        if (list.length > 0) setSelectedPersonIds([list[0].id]);
+        setSelectedPersonIds(list.map((person) => person.id));
+        if (list.length > 0) setMemoryPersonId(list[0].id);
       })
       .catch(() => setPeople([]));
+  }, []);
+
+  useEffect(() => {
+    setVoiceSupported(Boolean(speechRecognitionConstructor()));
+    return () => recognitionRef.current?.abort();
   }, []);
 
   useEffect(() => {
@@ -211,7 +245,7 @@ export default function AiPage() {
     try {
       const answer = await apiFetch<AiAnswer>('/ai/ask', {
         method: 'POST',
-        body: JSON.stringify({ question: asked, subjectPersonIds: selectedPersonIds }),
+        body: JSON.stringify({ question: asked }),
       });
       setTurns((prev) => prev.map((t, i) => (i === prev.length - 1 ? { ...t, answer } : t)));
     } catch (err) {
@@ -220,6 +254,56 @@ export default function AiPage() {
       );
     } finally {
       setLoading(false);
+    }
+  }
+
+  function handleVoiceInput() {
+    if (voiceListening) {
+      recognitionRef.current?.stop();
+      return;
+    }
+    const Recognition = speechRecognitionConstructor();
+    if (!Recognition) {
+      setVoiceMessage('A consulta por voz não está disponível neste navegador. Você pode continuar digitando.');
+      return;
+    }
+
+    const recognition = new Recognition();
+    recognition.lang = 'pt-BR';
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.onresult = (event) => {
+      const transcript = Array.from(event.results)
+        .filter((result) => result.isFinal)
+        .map((result) => result[0]?.transcript ?? '')
+        .join(' ')
+        .trim();
+      if (transcript) {
+        setQuestion((current) => `${current}${current.trim() ? ' ' : ''}${transcript}`.slice(0, 1000));
+        setVoiceMessage('Pergunta reconhecida. Revise o texto e toque em Perguntar.');
+      }
+    };
+    recognition.onerror = (event) => {
+      const denied = event.error === 'not-allowed' || event.error === 'service-not-allowed';
+      setVoiceMessage(
+        denied
+          ? 'O microfone não foi autorizado. Libere a permissão do navegador ou digite sua pergunta.'
+          : 'Não consegui entender o áudio. Tente falar novamente ou digite sua pergunta.',
+      );
+    };
+    recognition.onend = () => {
+      setVoiceListening(false);
+      recognitionRef.current = null;
+    };
+    recognitionRef.current = recognition;
+    setVoiceMessage('Ouvindo… fale sua pergunta em português.');
+    setVoiceListening(true);
+    try {
+      recognition.start();
+    } catch {
+      setVoiceListening(false);
+      recognitionRef.current = null;
+      setVoiceMessage('Não foi possível iniciar o microfone. Tente novamente ou digite sua pergunta.');
     }
   }
 
@@ -392,45 +476,16 @@ export default function AiPage() {
     <div className="max-w-2xl">
       <PageHeader
         title="Pergunte à ZELII"
-        description="Pergunte sobre a agenda, saúde ou escola — só o que você tem autorização para ver."
-        actions={
-          people && people.length > 1 ? (
-            <Select className="w-auto" value={selectedPersonId ?? ''} onChange={(e) => setSelectedPersonIds([e.target.value])} aria-label="Pessoa principal">
-              {people.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.display_name}
-                </option>
-              ))}
-            </Select>
-          ) : undefined
-        }
+        description="Pergunte sobre a agenda, saúde ou escola. A ZELII considera automaticamente toda a família, respeitando suas permissões."
       />
 
-      {people && people.length > 1 && (
-        <fieldset className="mt-5 rounded-xl border border-border bg-surface p-4">
-          <legend className="px-1 text-sm font-semibold text-ink">Pessoas consideradas na resposta</legend>
-          <div className="mt-2 flex flex-wrap gap-3">
-            {people.map((person) => (
-              <label key={person.id} className="flex items-center gap-2 text-sm text-ink">
-                <input
-                  type="checkbox"
-                  checked={selectedPersonIds.includes(person.id)}
-                  onChange={(event) =>
-                    setSelectedPersonIds((current) =>
-                      event.target.checked
-                        ? [...new Set([...current, person.id])]
-                        : current.length > 1
-                          ? current.filter((id) => id !== person.id)
-                          : current,
-                    )
-                  }
-                  className="h-4 w-4 accent-primary"
-                />
-                {person.display_name}
-              </label>
-            ))}
-          </div>
-        </fieldset>
+      {people && people.length > 0 && (
+        <div className="mt-5 rounded-xl border border-border bg-surface p-4" aria-label="Pessoas consideradas na resposta">
+          <p className="text-sm font-semibold text-ink">Toda a família será considerada</p>
+          <p className="mt-1 text-sm leading-relaxed text-inkMuted">
+            {people.map((person) => person.display_name).join(', ')}. A resposta mostra apenas os assuntos que você tem autorização para acessar.
+          </p>
+        </div>
       )}
 
       <details className="mt-8 rounded-xl border border-border bg-surface p-4 open:shadow-sm">
@@ -447,6 +502,18 @@ export default function AiPage() {
 
         {memoryPreferences && (
           <div className="mt-4 grid gap-3 rounded-lg bg-background p-3 sm:grid-cols-2">
+            {people && people.length > 1 && (
+              <label className="text-sm text-ink">
+                Memórias de
+                <Select
+                  value={selectedPersonId ?? ''}
+                  onChange={(event) => setMemoryPersonId(event.target.value)}
+                  className="mt-1 w-full"
+                >
+                  {people.map((person) => <option key={person.id} value={person.id}>{person.display_name}</option>)}
+                </Select>
+              </label>
+            )}
             <label className="flex items-center gap-2 text-sm text-ink">
               <input
                 type="checkbox"
@@ -694,17 +761,35 @@ export default function AiPage() {
         </section>
       )}
 
-      <form onSubmit={handleAsk} className="mt-6 flex gap-2">
+      <form onSubmit={handleAsk} className="mt-6">
+        <div className="flex gap-2">
         <Input
           value={question}
           onChange={(e) => setQuestion(e.target.value)}
           placeholder="Pergunte à ZELII..."
           className="flex-1"
           disabled={loading || selectedPersonIds.length === 0}
+          aria-label="Sua pergunta para a ZELII"
         />
+        <Button
+          type="button"
+          variant="secondary"
+          onClick={handleVoiceInput}
+          disabled={loading || voiceSupported !== true}
+          aria-pressed={voiceListening}
+          aria-label={voiceListening ? 'Parar gravação de voz' : 'Fazer pergunta por voz'}
+          title={voiceSupported === false ? 'Reconhecimento de voz indisponível neste navegador' : undefined}
+        >
+          {voiceListening ? 'Parar' : voiceSupported === false ? 'Voz indisponível' : 'Falar'}
+        </Button>
         <Button type="submit" disabled={loading || !question.trim() || selectedPersonIds.length === 0}>
           Perguntar
         </Button>
+        </div>
+        {voiceSupported === false && !voiceMessage && (
+          <p className="mt-2 text-xs text-inkMuted">Seu navegador não oferece ditado por voz. A consulta por texto continua disponível.</p>
+        )}
+        {voiceMessage && <p className="mt-2 text-xs text-inkMuted" role="status" aria-live="polite">{voiceMessage}</p>}
       </form>
     </div>
   );

@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { PROPOSED_ACTION_TYPES } from '@family-app/ai';
+import { getAiActionTool, PROPOSED_ACTION_TYPES } from '@family-app/ai';
 import type { ProposedActionType } from '@family-app/ai';
 import { permissionDomainSchema } from '@family-app/domain';
 import type { PermissionAction, PermissionDomain } from '@family-app/domain';
@@ -26,19 +26,6 @@ const createProposalSchema = z.object({
 
 type CreateProposalInput = z.input<typeof createProposalSchema>;
 type RequiredAuthorization = { domain: PermissionDomain; action: PermissionAction };
-
-const REQUIRED_AUTHORIZATION: Record<ProposedActionType, RequiredAuthorization[]> = {
-  PROPOSE_TASK: [{ domain: 'SCHEDULE', action: 'CREATE' }],
-  PROPOSE_CALENDAR_EVENT: [{ domain: 'SCHEDULE', action: 'CREATE' }],
-  PROPOSE_REQUEST: [{ domain: 'TRANSPORTATION', action: 'CREATE' }],
-  PROPOSE_RESPONSIBILITY_ASSIGNMENT: [{ domain: 'SCHEDULE', action: 'MANAGE' }],
-  PROPOSE_REMINDER: [{ domain: 'SCHEDULE', action: 'CREATE' }],
-  PROPOSE_PREPARATION_CHECKLIST: [{ domain: 'SCHEDULE', action: 'CREATE' }],
-  PROPOSE_CARE_BRIEF: [{ domain: 'HEALTH', action: 'CREATE' }],
-  PROPOSE_HANDOFF: [{ domain: 'SCHEDULE', action: 'MANAGE' }],
-  PROPOSE_SCHEDULE_ADJUSTMENT: [{ domain: 'SCHEDULE', action: 'EDIT' }],
-};
-
 @Injectable()
 export class AiProposalService {
   constructor(
@@ -59,7 +46,8 @@ export class AiProposalService {
     if (!parsed.success) throw new BadRequestException(parsed.error.issues[0]?.message ?? 'Proposta inválida.');
     const value = parsed.data;
     const subjectPersonIds = [...new Set(value.subjectPersonIds)];
-    const requiredAuthorization = REQUIRED_AUTHORIZATION[value.type];
+    const tool = getAiActionTool(value.type);
+    const requiredAuthorization = tool.requiredAuthorization;
 
     if (value.idempotencyKey) {
       const { data: existing } = await this.db(actor)
