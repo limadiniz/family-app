@@ -2,7 +2,7 @@ import Link from 'next/link';
 
 /**
  * Footer leve — só existe porque "Privacidade" saiu da navegação principal
- * (§11: nav principal reduzida a Produto / Como funciona / Para famílias /
+ * (§11: nav principal reduzida a Sobre / Como funciona / Para famílias /
  * Segurança) e precisa continuar acessível em algum lugar do site (§16).
  * Incluído na home e em toda página que usa `MarketingPage`.
  */

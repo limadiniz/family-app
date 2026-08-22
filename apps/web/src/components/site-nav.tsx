@@ -1,28 +1,33 @@
 'use client';
 
 import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 import { useEffect, useId, useRef, useState } from 'react';
 
 /**
- * Navegação principal (§11) — reduzida a 4 links (Produto, Como funciona,
- * Para famílias, Segurança). "Privacidade" foi pro footer (`site-footer.tsx`);
- * "Ajuda" e "Preços" saíram do nav principal por serem, hoje, placeholders
- * sem conteúdo real (`/ajuda`: "em construção"; `/precos`: "ainda não é uma
+ * Navegação principal (§11) — reduzida a 4 links (Sobre, Como funciona,
+ * Para famílias, Segurança). "Sobre" é só o rótulo novo do link institucional
+ * que antes se chamava "Produto" — a rota (`/produto`) foi mantida como
+ * estava para não criar uma migração de rotas sem necessidade; só o texto
+ * visível mudou. "Privacidade" foi pro footer (`site-footer.tsx`); "Ajuda" e
+ * "Preços" saíram do nav principal por serem, hoje, placeholders sem
+ * conteúdo real (`/ajuda`: "em construção"; `/precos`: "ainda não é uma
  * decisão comercial final") — as rotas continuam existindo e acessíveis por
  * URL direta, só não competem mais por espaço no cabeçalho.
  *
- * Abaixo de `lg` (1024px): menu hamburguer. Vira client component só por
- * causa disso (estado do menu aberto/fechado) — o resto do site continua
- * Server Component.
+ * Abaixo de `lg` (1024px): menu hamburguer. Vira client component também por
+ * causa do `usePathname()` (estado ativo do link atual) — o resto do site
+ * continua Server Component.
  */
 const NAV_LINKS = [
-  { href: '/produto', label: 'Produto' },
+  { href: '/produto', label: 'Sobre' },
   { href: '/como-funciona', label: 'Como funciona' },
   { href: '/familias', label: 'Para famílias' },
   { href: '/seguranca', label: 'Segurança' },
 ];
 
 export function SiteNav() {
+  const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const menuId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
@@ -77,11 +82,19 @@ export function SiteNav() {
         </Link>
 
         <div className="hidden gap-7 lg:flex">
-          {NAV_LINKS.map((l) => (
-            <Link key={l.href} href={l.href} className="text-sm text-inkMuted hover:text-ink">
-              {l.label}
-            </Link>
-          ))}
+          {NAV_LINKS.map((l) => {
+            const current = pathname === l.href;
+            return (
+              <Link
+                key={l.href}
+                href={l.href}
+                aria-current={current ? 'page' : undefined}
+                className={`text-sm hover:text-ink ${current ? 'font-semibold text-ink' : 'text-inkMuted'}`}
+              >
+                {l.label}
+              </Link>
+            );
+          })}
         </div>
 
         <div className="hidden gap-3 lg:flex">
@@ -129,17 +142,21 @@ export function SiteNav() {
           className="fixed inset-x-0 bottom-0 top-[77px] z-40 overflow-y-auto bg-surface lg:hidden"
         >
           <div className="flex flex-col gap-1 px-6 py-6">
-            {NAV_LINKS.map((l, i) => (
-              <Link
-                key={l.href}
-                ref={i === 0 ? firstLinkRef : undefined}
-                href={l.href}
-                onClick={() => setOpen(false)}
-                className="min-h-11 rounded-md px-3 py-3 text-base text-ink hover:bg-surfaceMuted"
-              >
-                {l.label}
-              </Link>
-            ))}
+            {NAV_LINKS.map((l, i) => {
+              const current = pathname === l.href;
+              return (
+                <Link
+                  key={l.href}
+                  ref={i === 0 ? firstLinkRef : undefined}
+                  href={l.href}
+                  onClick={() => setOpen(false)}
+                  aria-current={current ? 'page' : undefined}
+                  className={`min-h-11 rounded-md px-3 py-3 text-base hover:bg-surfaceMuted ${current ? 'font-semibold text-ink' : 'text-ink'}`}
+                >
+                  {l.label}
+                </Link>
+              );
+            })}
             <div className="mt-4 flex flex-col gap-3 border-t border-border pt-4">
               <Link
                 href="/entrar"
