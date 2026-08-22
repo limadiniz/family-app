@@ -16,6 +16,7 @@ export const serverEnvSchema = z.object({
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
 
   API_PORT: z.coerce.number().int().positive().default(4000),
+  WEB_APP_URL: z.string().url().default('http://localhost:3100'),
   CORS_ALLOWED_ORIGINS: z
     .string()
     .default('')

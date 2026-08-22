@@ -26,6 +26,11 @@ interface FamilyInvitation {
   expires_at: string;
 }
 
+interface InvitationDelivery {
+  channel: 'EMAIL';
+  status: 'SENT' | 'FAILED';
+}
+
 /**
  * Unidades familiares (§10/§68) — distinto da página Pessoas: aqui é
  * sobre as FamilyUnits em si (o "onde" — pode haver mais de uma, ex.
@@ -42,7 +47,9 @@ export default function FamilyPage() {
   const [inviteRole, setInviteRole] = useState('CO_GUARDIAN');
   const [subjectPersonIds, setSubjectPersonIds] = useState<string[]>([]);
   const [inviteLink, setInviteLink] = useState<string | null>(null);
+  const [inviteDelivery, setInviteDelivery] = useState<(InvitationDelivery & { email: string }) | null>(null);
   const [inviteBusy, setInviteBusy] = useState(false);
+  const [resendingInvitationId, setResendingInvitationId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
   function refresh() {
@@ -68,14 +75,17 @@ export default function FamilyPage() {
     if (!familyUnitId) return;
     setInviteBusy(true);
     setInviteLink(null);
+    setInviteDelivery(null);
     setCopied(false);
     setError(null);
     try {
-      const invitation = await apiFetch<{ token: string }>('/invitations', {
+      const destinationEmail = inviteeEmail.trim().toLowerCase();
+      const invitation = await apiFetch<{ token: string; delivery: InvitationDelivery }>('/invitations', {
         method: 'POST',
         body: JSON.stringify({ familyUnitId, inviteeEmail, subjectPersonIds, role: inviteRole }),
       });
       setInviteLink(`${window.location.origin}/convite/${invitation.token}`);
+      setInviteDelivery({ ...invitation.delivery, email: destinationEmail });
       setInviteeEmail('');
       const updated = await apiFetch<FamilyInvitation[]>('/invitations');
       setInvitations(updated);
@@ -83,6 +93,20 @@ export default function FamilyPage() {
       setError(err instanceof Error ? err.message : 'Não foi possível criar o convite.');
     } finally {
       setInviteBusy(false);
+    }
+  }
+
+  async function resendInvitation(invitation: FamilyInvitation) {
+    setResendingInvitationId(invitation.id);
+    setInviteDelivery(null);
+    setError(null);
+    try {
+      const delivery = await apiFetch<InvitationDelivery>(`/invitations/${invitation.id}/resend`, { method: 'POST' });
+      setInviteDelivery({ ...delivery, email: invitation.invitee_email });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Não foi possível reenviar o convite.');
+    } finally {
+      setResendingInvitationId(null);
     }
   }
 
@@ -163,7 +187,7 @@ export default function FamilyPage() {
           <p className="text-sm font-medium text-primary">Cuidado compartilhado</p>
           <h2 className="mt-1 text-xl font-semibold text-ink">Conectar outro responsável</h2>
           <p className="mt-2 text-sm text-inkMuted">
-            Convide mãe, pai ou outro responsável para a mesma família. A pessoa entra com a própria conta e passa a ver as agendas dos filhos dessa unidade e receber tarefas.
+            Convide mãe, pai ou outro responsável para a mesma família. A ZELII envia o acesso diretamente por e-mail; a pessoa entra com a própria conta e passa a ver as agendas dos filhos dessa unidade e receber tarefas.
           </p>
 
           <form onSubmit={createInvitation} className="mt-5 space-y-4">
@@ -206,15 +230,26 @@ export default function FamilyPage() {
               )}
             </fieldset>
             <Button type="submit" disabled={inviteBusy || !inviteeEmail.trim() || subjectPersonIds.length === 0}>
-              {inviteBusy ? 'Criando convite…' : 'Criar link de convite'}
+              {inviteBusy ? 'Enviando convite…' : 'Enviar convite por e-mail'}
             </Button>
           </form>
 
-          {inviteLink && (
-            <div className="mt-5 rounded-lg border border-success/30 bg-success/5 p-4">
-              <p className="text-sm font-medium text-ink">Convite pronto para compartilhar</p>
-              <p className="mt-1 break-all text-xs text-inkMuted">{inviteLink}</p>
-              <Button className="mt-3" variant="secondary" onClick={copyInvitation}>{copied ? 'Link copiado' : 'Copiar link'}</Button>
+          {inviteDelivery && (
+            <div className={`mt-5 rounded-lg border p-4 ${inviteDelivery.status === 'SENT' ? 'border-success/30 bg-success/5' : 'border-critical/30 bg-critical/5'}`}>
+              <p className="text-sm font-medium text-ink">
+                {inviteDelivery.status === 'SENT'
+                  ? `Convite enviado para ${inviteDelivery.email}`
+                  : `Não foi possível enviar para ${inviteDelivery.email}`}
+              </p>
+              <p className="mt-1 text-sm text-inkMuted">
+                {inviteDelivery.status === 'SENT'
+                  ? 'A pessoa receberá um acesso seguro na caixa de entrada. Se não encontrar, peça para verificar o spam.'
+                  : inviteLink
+                    ? 'O convite continua válido. Tente reenviar ou compartilhe o link abaixo.'
+                    : 'O convite continua válido. Aguarde um minuto e tente reenviar.'}
+              </p>
+              {inviteLink && <p className="mt-2 break-all text-xs text-inkMuted">{inviteLink}</p>}
+              {inviteLink && <Button className="mt-3" variant="secondary" onClick={copyInvitation}>{copied ? 'Link copiado' : 'Copiar link também'}</Button>}
             </div>
           )}
 
@@ -225,7 +260,20 @@ export default function FamilyPage() {
                 {invitations.slice(0, 5).map((invitation) => (
                   <li key={invitation.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-surfaceMuted px-3 py-2 text-sm">
                     <span className="text-ink">{invitation.invitee_email}</span>
-                    <StatusBadge domain="invitationStatus" value={invitation.status} />
+                    <div className="flex items-center gap-2">
+                      <StatusBadge domain="invitationStatus" value={invitation.status} />
+                      {invitation.status === 'PENDING' && (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => resendInvitation(invitation)}
+                          disabled={resendingInvitationId === invitation.id}
+                        >
+                          {resendingInvitationId === invitation.id ? 'Reenviando…' : 'Reenviar e-mail'}
+                        </Button>
+                      )}
+                    </div>
                   </li>
                 ))}
               </ul>

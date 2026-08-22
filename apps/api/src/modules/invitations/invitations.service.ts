@@ -5,6 +5,11 @@ import { SupabaseService } from '../../common/supabase.service';
 
 const RESPONSIBLE_ROLES = new Set(['GUARDIAN', 'CO_GUARDIAN']);
 
+type InvitationDelivery = {
+  channel: 'EMAIL';
+  status: 'SENT' | 'FAILED';
+};
+
 @Injectable()
 export class InvitationsService {
   constructor(private readonly supabase: SupabaseService) {}
@@ -81,7 +86,38 @@ export class InvitationsService {
       if (error.code === '23505') throw new BadRequestException('Já existe um convite pendente para este e-mail.');
       throw new BadRequestException(error.message);
     }
-    return data;
+    const delivery = await this.sendInvitationEmail(data.invitee_email as string, data.token as string);
+    return { ...data, delivery };
+  }
+
+  async resend(actor: RequestActor, invitationId: string) {
+    if (!actor.tenantId || !actor.personId) throw new BadRequestException('Conclua o cadastro inicial primeiro.');
+
+    const db = this.db(actor);
+    const { data: invitation, error } = await db
+      .from('invitations')
+      .select('id, family_unit_id, invited_by_person_id, invitee_email, token, status, expires_at')
+      .eq('id', invitationId)
+      .maybeSingle();
+    if (error) throw new BadRequestException(error.message);
+    if (!invitation) throw new NotFoundException('Convite não encontrado.');
+    if (invitation.status !== 'PENDING' || new Date(invitation.expires_at as string).getTime() <= Date.now()) {
+      throw new BadRequestException('Este convite expirou, foi cancelado ou já foi usado.');
+    }
+
+    const { data: membership, error: membershipError } = await db
+      .from('family_memberships')
+      .select('role, is_active')
+      .eq('family_unit_id', invitation.family_unit_id)
+      .eq('person_id', actor.personId)
+      .eq('is_active', true)
+      .maybeSingle();
+    if (membershipError) throw new BadRequestException(membershipError.message);
+    if (!membership || !['FAMILY_OWNER', 'GUARDIAN', 'CO_GUARDIAN'].includes(membership.role as string)) {
+      throw new BadRequestException('Você não tem permissão para reenviar este convite.');
+    }
+
+    return this.sendInvitationEmail(invitation.invitee_email as string, invitation.token as string);
   }
 
   async list(actor: RequestActor, familyUnitId?: string) {
@@ -137,5 +173,21 @@ export class InvitationsService {
     if (message.includes('authentication_required')) return 'Entre na sua conta para aceitar o convite.';
     if (message.includes('display_name_required')) return 'Informe seu nome para entrar na família.';
     return message;
+  }
+
+  private async sendInvitationEmail(inviteeEmail: string, token: string): Promise<InvitationDelivery> {
+    const inviteUrl = `${this.supabase.webAppUrl}/convite/${token}`;
+    try {
+      const { error } = await this.supabase.anonymous().auth.signInWithOtp({
+        email: inviteeEmail,
+        options: {
+          emailRedirectTo: inviteUrl,
+          shouldCreateUser: true,
+        },
+      });
+      return { channel: 'EMAIL', status: error ? 'FAILED' : 'SENT' };
+    } catch {
+      return { channel: 'EMAIL', status: 'FAILED' };
+    }
   }
 }

@@ -28,6 +28,7 @@ primary_region = "gru"             # São Paulo — same region as the Supabase 
   NODE_ENV = "production"
   APP_ENV = "production"
   API_PORT = "4000"
+  WEB_APP_URL = "https://www.zelii.com.br"
 
 [http_service]
   internal_port = 4000

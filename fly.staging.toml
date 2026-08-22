@@ -26,6 +26,7 @@ primary_region = "gru"          # São Paulo — same region as the Supabase pro
   NODE_ENV = "production"
   APP_ENV = "staging"
   API_PORT = "4000"
+  WEB_APP_URL = "https://family-app-web-diniz-tec.vercel.app"
 
 [http_service]
   internal_port = 4000

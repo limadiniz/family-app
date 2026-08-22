@@ -19,6 +19,12 @@ import { loadServerEnv } from '@family-app/config';
 export class SupabaseService {
   private readonly env = loadServerEnv();
 
+  anonymous(): SupabaseClient {
+    return createClient(this.env.SUPABASE_URL, this.env.SUPABASE_ANON_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+  }
+
   forUser(bearerToken: string): SupabaseClient {
     return createClient(this.env.SUPABASE_URL, this.env.SUPABASE_ANON_KEY, {
       global: { headers: { Authorization: `Bearer ${bearerToken}` } },
@@ -38,5 +44,9 @@ export class SupabaseService {
 
   get url() {
     return this.env.SUPABASE_URL;
+  }
+
+  get webAppUrl() {
+    return this.env.WEB_APP_URL.replace(/\/$/, '');
   }
 }

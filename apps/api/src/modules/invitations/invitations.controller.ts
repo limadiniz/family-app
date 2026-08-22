@@ -30,6 +30,11 @@ export class InvitationsController {
     return this.invitations.eligibleSubjects(actor, familyUnitId);
   }
 
+  @Post(':invitationId/resend')
+  resend(@CurrentActor() actor: RequestActor, @Param('invitationId') invitationId: string) {
+    return this.invitations.resend(actor, invitationId);
+  }
+
   @Get(':token')
   lookup(@CurrentActor({ requireOnboarded: false }) actor: RequestActor, @Param('token') token: string) {
     return this.invitations.lookup(actor, token);
