@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { apiFetch } from '@/lib/api-client';
+import { PageHeader, Select, Input, Button, Card } from '@/components/ui';
 
 interface Person {
   id: string;
@@ -73,37 +74,33 @@ export default function AiPage() {
 
   return (
     <div className="max-w-2xl">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold text-ink">Pergunte à ZELII</h1>
-          <p className="mt-1 text-sm text-inkMuted">Pergunte sobre a agenda, saúde ou escola — só o que você tem autorização para ver.</p>
-        </div>
-        {people && people.length > 1 && (
-          <select
-            className="rounded-md border border-border bg-surface px-3 py-2 text-sm text-ink"
-            value={selectedPersonId ?? ''}
-            onChange={(e) => setSelectedPersonId(e.target.value)}
-          >
-            {people.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.display_name}
-              </option>
-            ))}
-          </select>
-        )}
-      </div>
+      <PageHeader
+        title="Pergunte à ZELII"
+        description="Pergunte sobre a agenda, saúde ou escola — só o que você tem autorização para ver."
+        actions={
+          people && people.length > 1 ? (
+            <Select className="w-auto" value={selectedPersonId ?? ''} onChange={(e) => setSelectedPersonId(e.target.value)}>
+              {people.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.display_name}
+                </option>
+              ))}
+            </Select>
+          ) : undefined
+        }
+      />
 
       <div className="mt-8 space-y-6">
         {turns.length === 0 && (
-          <div className="rounded-lg border border-border bg-surface p-6 text-sm text-inkMuted">
+          <Card className="text-sm text-inkMuted">
             Experimente: <span className="text-ink">&ldquo;O que tenho amanhã?&rdquo;</span>,{' '}
             <span className="text-ink">&ldquo;Quando é a próxima consulta?&rdquo;</span>
-          </div>
+          </Card>
         )}
         {turns.map((turn, i) => (
-          <div key={i} className="rounded-lg border border-border bg-surface p-6">
+          <Card key={i}>
             <p className="text-sm font-medium text-ink">{turn.question}</p>
-            {turn.error && <p className="mt-3 text-sm text-critical">{turn.error}</p>}
+            {turn.error && <p className="mt-3 text-sm text-critical" role="alert">{turn.error}</p>}
             {turn.answer && (
               <div className="mt-3 space-y-3">
                 <p className="whitespace-pre-line text-sm text-inkMuted">{turn.answer.text}</p>
@@ -118,26 +115,27 @@ export default function AiPage() {
                 )}
               </div>
             )}
-            {!turn.answer && !turn.error && <p className="mt-3 text-sm text-inkMuted">Pensando…</p>}
-          </div>
+            {!turn.answer && !turn.error && (
+              <p className="mt-3 flex items-center gap-2 text-sm text-inkMuted" role="status">
+                <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-border border-t-primary" aria-hidden="true" />
+                Pensando…
+              </p>
+            )}
+          </Card>
         ))}
       </div>
 
       <form onSubmit={handleAsk} className="mt-6 flex gap-2">
-        <input
+        <Input
           value={question}
           onChange={(e) => setQuestion(e.target.value)}
           placeholder="Pergunte à ZELII..."
-          className="flex-1 rounded-md border border-border bg-surface px-3 py-2 text-sm text-ink"
+          className="flex-1"
           disabled={loading || !selectedPersonId}
         />
-        <button
-          type="submit"
-          disabled={loading || !question.trim() || !selectedPersonId}
-          className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
-        >
+        <Button type="submit" disabled={loading || !question.trim() || !selectedPersonId}>
           Perguntar
-        </button>
+        </Button>
       </form>
     </div>
   );

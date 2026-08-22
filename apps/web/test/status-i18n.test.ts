@@ -32,5 +32,32 @@ describe('translateStatus', () => {
     expect(translateStatus('responsibility', 'FAILED').label).toBe('Não realizada');
     expect(translateStatus('calendarCategory', 'HEALTH').tone).toBe('critical');
     expect(translateStatus('notificationLevel', 'CRITICAL').tone).toBe('critical');
+    expect(translateStatus('role', 'FAMILY_OWNER').label).toBe('Responsável principal');
+    expect(translateStatus('requestType', 'RESPONSIBILITY_TRANSFER').label).toBe('Transferência de responsabilidade');
+    expect(translateStatus('taskPriority', 'HIGH').tone).toBe('warning');
+    expect(translateStatus('responsibilityType', 'MEDICATION_SUPPORT').tone).toBe('critical');
+    expect(translateStatus('careNetworkMemberStatus', 'PENDING').tone).toBe('warning');
+    expect(translateStatus('capability', 'CAN_ADMINISTER_REGISTERED_MEDICATION').tone).toBe('critical');
+  });
+
+  it('translates every role in the authoritative roleSchema enum (packages/domain/src/entities/role-permission.ts), never falling back to a humanized raw value', () => {
+    const roles = [
+      'FAMILY_OWNER',
+      'GUARDIAN',
+      'CO_GUARDIAN',
+      'CAREGIVER',
+      'TEMPORARY_CAREGIVER',
+      'EXTENDED_FAMILY',
+      'TEEN',
+      'CHILD',
+      'PROFESSIONAL',
+      'EMERGENCY_ACCESS',
+      'PLATFORM_ADMIN',
+    ];
+    for (const role of roles) {
+      const result = translateStatus('role', role);
+      expect(result.label).not.toBe(role);
+      expect(result.label).not.toMatch(/_/);
+    }
   });
 });

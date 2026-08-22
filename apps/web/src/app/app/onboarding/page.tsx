@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { Suspense, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { apiFetch, ApiError } from '@/lib/api-client';
-import { Input, Button, Card } from '@/components/ui';
+import { Input, Button, Card, LoadingState } from '@/components/ui';
+import { ONBOARDING_FALLBACK_RETURN_TO, resolveSafeReturnTo } from '@/lib/onboarding-redirect';
 
 const TOTAL_STEPS = 5;
 
@@ -19,7 +20,33 @@ const TOTAL_STEPS = 5;
  * ordem que entrega o "aha" mais cedo.
  */
 export default function OnboardingPage() {
+  // useSearchParams() requires a Suspense boundary during static
+  // generation (Next.js App Router) — without it `next build` fails this
+  // route. The fallback only ever flashes for a static-render instant;
+  // client navigation has the value immediately.
+  return (
+    <Suspense
+      fallback={
+        <main className="mx-auto max-w-lg py-16">
+          <LoadingState label="Carregando…" />
+        </main>
+      }
+    >
+      <OnboardingWizard />
+    </Suspense>
+  );
+}
+
+function OnboardingWizard() {
   const router = useRouter();
+  // §8: where the gate intercepted the user from, if anywhere — validated
+  // against the internal allowlist (never trusted raw; see
+  // lib/onboarding-redirect.ts). Read once at mount: the value doesn't
+  // change across this page's own lifetime, and re-reading it after the
+  // wizard has advanced would be pointless (the URL itself isn't touched
+  // by the wizard's internal step navigation, only by the initial link).
+  const searchParams = useSearchParams();
+  const [returnTo] = useState(() => resolveSafeReturnTo(searchParams.get('returnTo')));
   const [step, setStep] = useState(1);
   const [familyUnitId, setFamilyUnitId] = useState<string | null>(null);
   const [familyUnitName, setFamilyUnitName] = useState('');
@@ -31,10 +58,6 @@ export default function OnboardingPage() {
   const [captureSent, setCaptureSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    apiFetch<{ bootstrapped: boolean }>('/onboarding/status').catch(() => undefined);
-  }, []);
 
   async function createFamilyUnit() {
     setError(null);
@@ -187,26 +210,40 @@ export default function OnboardingPage() {
         </Card>
       )}
 
-      {step === 5 && (
-        <Card className="mt-6">
-          <h1 className="text-2xl font-semibold text-ink">Tudo pronto</h1>
-          <p className="mt-2 text-sm text-inkMuted">
-            {captureSent
-              ? 'A ZELII já está processando o que você colou — vai te esperar na Caixa de Entrada, pronto pra revisar e confirmar.'
-              : 'Sua família está criada. A qualquer momento você pode colar algo na Caixa de Entrada pra ver a ZELII em ação.'}
-          </p>
-          <div className="mt-4 flex gap-2">
-            <Button onClick={() => router.push(captureSent ? '/app/capture' : '/app/today')}>
-              {captureSent ? 'Revisar na Caixa de Entrada' : 'Ir para o Hoje'}
-            </Button>
-            {captureSent && (
-              <Button variant="secondary" onClick={() => router.push('/app/today')}>
-                Ir para o Hoje
-              </Button>
-            )}
-          </div>
-        </Card>
-      )}
+      {step === 5 && (() => {
+        // §8: honor where the user was actually trying to go. Only takes
+        // priority over the capture "aha" nudge when the gate genuinely
+        // intercepted a specific other page — if returnTo is just the
+        // default (nobody was intercepted, or it fell back), the existing
+        // "go see your first capture" flow stays the primary CTA.
+        const hadExplicitReturnTo = returnTo !== ONBOARDING_FALLBACK_RETURN_TO;
+        const primaryDestination = hadExplicitReturnTo ? returnTo : captureSent ? '/app/capture' : '/app/today';
+        const primaryLabel = hadExplicitReturnTo
+          ? 'Continuar'
+          : captureSent
+            ? 'Revisar na Caixa de Entrada'
+            : 'Ir para o Hoje';
+        const showTodaySecondary = primaryDestination !== '/app/today';
+
+        return (
+          <Card className="mt-6">
+            <h1 className="text-2xl font-semibold text-ink">Tudo pronto</h1>
+            <p className="mt-2 text-sm text-inkMuted">
+              {captureSent
+                ? 'A ZELII já está processando o que você colou — vai te esperar na Caixa de Entrada, pronto pra revisar e confirmar.'
+                : 'Sua família está criada. A qualquer momento você pode colar algo na Caixa de Entrada pra ver a ZELII em ação.'}
+            </p>
+            <div className="mt-4 flex gap-2">
+              <Button onClick={() => router.push(primaryDestination)}>{primaryLabel}</Button>
+              {showTodaySecondary && (
+                <Button variant="secondary" onClick={() => router.push('/app/today')}>
+                  Ir para o Hoje
+                </Button>
+              )}
+            </div>
+          </Card>
+        );
+      })()}
 
       {error && <p className="mt-4 text-sm text-critical">{error}</p>}
     </main>

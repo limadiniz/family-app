@@ -80,8 +80,19 @@ export default function TodayPage() {
     if (!selectedPersonId) return;
     setToday(null);
     apiFetch<TodayResponse>(`/today?subjectPersonId=${selectedPersonId}`)
-      .then(setToday)
-      .catch((err) => setError(err.message));
+      .then((res) => {
+        // A malformed response (wrong shape — an unexpected backend change, a
+        // proxy mangling the body, ...) must not reach the render below as if
+        // it were valid data: `today.conflicts.length` etc. would throw
+        // during render, an uncaught crash with no boundary above this page
+        // to contain it (§7: an error here must stay an error HERE, never
+        // take down the whole shell).
+        const valid =
+          res && Array.isArray(res.events) && Array.isArray(res.tasks) && Array.isArray(res.routines) && Array.isArray(res.conflicts);
+        if (!valid) throw new Error('Resposta inesperada do servidor.');
+        setToday(res);
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : 'Erro inesperado.'));
   }, [selectedPersonId, reloadKey]);
 
   // "quem está cuidando" — resolve responsible_person_id pro nome real,

@@ -21,6 +21,21 @@ export class HttpExceptionFilter implements ExceptionFilter {
 
     if (exception instanceof PolicyDeniedError) {
       this.logger.warn({ correlationId, rule: exception.rule }, 'policy_denied');
+      // NOT_ONBOARDED is a DENY at the Policy Engine level (no
+      // tenantId/personId to evaluate against) but it isn't a real
+      // authorization refusal — it's "finish onboarding first". Surface
+      // the same stable ONBOARDING_REQUIRED code current-actor.decorator
+      // uses, so a client only has to branch on one code regardless of
+      // which code path caught the not-onboarded case (§8).
+      if (exception.rule === 'NOT_ONBOARDED') {
+        return response.status(HttpStatus.FORBIDDEN).json({
+          error: {
+            code: 'ONBOARDING_REQUIRED',
+            message: 'Conclua o cadastro inicial antes de continuar.',
+            correlationId,
+          },
+        });
+      }
       return response.status(HttpStatus.FORBIDDEN).json({
         error: {
           code: 'POLICY_DENIED',
@@ -44,14 +59,18 @@ export class HttpExceptionFilter implements ExceptionFilter {
     if (exception instanceof HttpException) {
       const status = exception.getStatus();
       const body = exception.getResponse();
+      const bodyObj = typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : null;
       const message =
-        typeof body === 'string'
-          ? body
-          : ((body as { message?: string | string[] }).message ?? exception.message);
-      this.logger.warn({ correlationId, status }, 'http_exception');
+        typeof body === 'string' ? body : ((bodyObj?.message as string | string[] | undefined) ?? exception.message);
+      // An exception thrown with an object body carrying its own `code`
+      // (e.g. current-actor.decorator's ONBOARDING_REQUIRED) wins over
+      // the generic HttpStatus name — that's how call sites opt into a
+      // stable, app-specific code instead of the framework's 'FORBIDDEN'.
+      const code = (typeof bodyObj?.code === 'string' ? bodyObj.code : undefined) ?? HttpStatus[status] ?? 'ERROR';
+      this.logger.warn({ correlationId, status, code }, 'http_exception');
       return response.status(status).json({
         error: {
-          code: HttpStatus[status] ?? 'ERROR',
+          code,
           message: Array.isArray(message) ? message.join(' ') : message,
           correlationId,
         },

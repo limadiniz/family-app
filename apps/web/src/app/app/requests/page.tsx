@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { apiFetch, ApiError } from '@/lib/api-client';
+import { PageHeader, Button, LoadingState, ErrorState, EmptyState, StatusBadge } from '@/components/ui';
 
 interface FamilyRequest {
   id: string;
@@ -42,55 +43,60 @@ export default function RequestsPage() {
 
   return (
     <div className="max-w-2xl">
-      <h1 className="text-2xl font-semibold text-ink">Solicitações</h1>
-      <p className="mt-1 text-sm text-inkMuted">Pedidos entre responsáveis — nada muda até que a outra pessoa aceite.</p>
+      <PageHeader title="Solicitações" description="Pedidos entre responsáveis — nada muda até que a outra pessoa aceite." />
 
-      {error && <p className="mt-4 text-sm text-critical">{error}</p>}
+      {error && (
+        <div className="mt-4">
+          <ErrorState description={error} onRetry={load} />
+        </div>
+      )}
 
       <section className="mt-8">
         <h2 className="text-sm font-medium text-inkMuted">Recebidas</h2>
         <div className="mt-3 space-y-3">
-          {(incoming ?? []).map((r) => (
+          {!error && incoming === null && <LoadingState label="Carregando solicitações recebidas…" />}
+          {incoming?.map((r) => (
             <div key={r.id} className="rounded-lg border border-border bg-surface p-4">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium text-ink">{r.type}</span>
-                <span className="text-xs text-inkMuted">{r.status}</span>
+              <div className="flex items-center justify-between gap-2">
+                <StatusBadge domain="requestType" value={r.type} />
+                <StatusBadge domain="request" value={r.status} />
               </div>
-              {r.note && <p className="mt-1 text-sm text-inkMuted">{r.note}</p>}
+              {r.note && <p className="mt-2 text-sm text-inkMuted">{r.note}</p>}
               {r.status === 'SENT' || r.status === 'VIEWED' ? (
                 <div className="mt-3 flex gap-2">
-                  <button onClick={() => act(r.id, 'accept')} className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-white">
+                  <Button size="sm" onClick={() => act(r.id, 'accept')}>
                     Aceitar
-                  </button>
-                  <button onClick={() => act(r.id, 'decline')} className="rounded-md border border-border px-3 py-1.5 text-xs text-ink">
+                  </Button>
+                  <Button size="sm" variant="secondary" onClick={() => act(r.id, 'decline')}>
                     Recusar
-                  </button>
+                  </Button>
                 </div>
               ) : null}
             </div>
           ))}
-          {incoming && incoming.length === 0 && <p className="text-sm text-inkMuted">Nenhuma solicitação recebida.</p>}
+          {incoming && incoming.length === 0 && <EmptyState title="Nenhuma solicitação recebida" />}
         </div>
       </section>
 
       <section className="mt-8">
         <h2 className="text-sm font-medium text-inkMuted">Enviadas</h2>
         <div className="mt-3 space-y-3">
-          {(outgoing ?? []).map((r) => (
+          {!error && outgoing === null && <LoadingState label="Carregando solicitações enviadas…" />}
+          {outgoing?.map((r) => (
             <div key={r.id} className="rounded-lg border border-border bg-surface p-4">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium text-ink">{r.type}</span>
-                <span className="text-xs text-inkMuted">{r.status}</span>
+              <div className="flex items-center justify-between gap-2">
+                <StatusBadge domain="requestType" value={r.type} />
+                <StatusBadge domain="request" value={r.status} />
               </div>
-              {r.note && <p className="mt-1 text-sm text-inkMuted">{r.note}</p>}
+              {r.note && <p className="mt-2 text-sm text-inkMuted">{r.note}</p>}
               {r.status === 'SENT' && (
-                <button onClick={() => act(r.id, 'cancel')} className="mt-3 rounded-md border border-border px-3 py-1.5 text-xs text-ink">
+                <Button size="sm" variant="secondary" className="mt-3" onClick={() => act(r.id, 'cancel')}>
                   Cancelar
-                </button>
+                </Button>
               )}
             </div>
           ))}
-          {outgoing && outgoing.length === 0 && <p className="text-sm text-inkMuted">Nenhuma solicitação enviada.</p>}
+          {outgoing && outgoing.length === 0 && <EmptyState title="Nenhuma solicitação enviada" />}
         </div>
       </section>
     </div>

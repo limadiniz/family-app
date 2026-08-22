@@ -16,6 +16,17 @@ export class ApiError extends Error {
 }
 
 /**
+ * True for a genuine Policy Engine authorization denial (`POLICY_DENIED`,
+ * see apps/api's HttpExceptionFilter) — deliberately excludes
+ * `ONBOARDING_REQUIRED`, which is also a `PolicyDeniedError` under the
+ * hood but is its own state (`OnboardingGate`/`OnboardingRequiredState`),
+ * not "you're not allowed to see this" (§8, P0.5).
+ */
+export function isPermissionDenied(err: unknown): boolean {
+  return err instanceof ApiError && err.code === 'POLICY_DENIED';
+}
+
+/**
  * Thin fetch wrapper that attaches the current Supabase session's access
  * token — every real data operation goes through apps/api (§54), never
  * directly against Postgres/PostgREST from the browser except via the

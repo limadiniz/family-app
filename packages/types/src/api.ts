@@ -27,6 +27,21 @@ export interface ApiPolicyDeniedBody extends ApiErrorBody {
   };
 }
 
+/**
+ * "Finish onboarding first" — thrown by `@CurrentActor()` (default
+ * `requireOnboarded: true`) when the actor has no tenantId/personId yet,
+ * and by the Policy Engine's NOT_ONBOARDED rule via the same code (see
+ * apps/api's HttpExceptionFilter). One stable code regardless of which
+ * server-side path caught it, so apps/web and apps/mobile only need to
+ * branch on `code === 'ONBOARDING_REQUIRED'` once, in one shared place,
+ * rather than string-matching `message` (§8).
+ */
+export interface ApiOnboardingRequiredBody extends ApiErrorBody {
+  error: ApiErrorBody['error'] & {
+    code: 'ONBOARDING_REQUIRED';
+  };
+}
+
 export interface PaginatedResponse<T> {
   items: T[];
   nextCursor: string | null;

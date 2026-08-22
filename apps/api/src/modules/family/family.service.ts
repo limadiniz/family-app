@@ -30,13 +30,23 @@ export class FamilyService {
     return data;
   }
 
+  /**
+   * `roles` (added for the Pessoas page's filters — §5 of the redesign
+   * prompt: Todos/Dependentes/Responsáveis/Cuidadores/Profissionais) is
+   * every ACTIVE role this person holds in any FamilyUnit — not just the
+   * actor's own. This is a read-only, additive field on an already
+   * policy-filtered response: it doesn't change what's returned, only
+   * what's now attached to each already-approved row, and it's a single
+   * extra batched query (not N+1) fetched after the policy filter, using
+   * only the ids that already passed VIEW/PROFILE.
+   */
   async listPersonsInMyFamilies(actor: RequestActor) {
     // RLS already scopes this to the actor's tenant; we additionally filter
     // per-row through the Policy Engine so a recomposed family sharing one
     // tenant never leaks a person the actor has no relationship to.
     const { data, error } = await this.db(actor).from('persons').select('*').order('display_name');
     if (error) throw new BadRequestException(error.message);
-    const results = [];
+    const results: Array<Record<string, unknown>> = [];
     for (const person of data ?? []) {
       const decision = await this.policy
         .authorizeOrThrow(actor, 'VIEW', 'PROFILE', person.id as string)
@@ -44,7 +54,23 @@ export class FamilyService {
         .catch(() => false);
       if (decision) results.push(person);
     }
-    return results;
+    if (results.length === 0) return results;
+
+    const personIds = results.map((p) => p.id as string);
+    const { data: memberships, error: membershipsError } = await this.db(actor)
+      .from('family_memberships')
+      .select('person_id, role')
+      .eq('is_active', true)
+      .in('person_id', personIds);
+    if (membershipsError) throw new BadRequestException(membershipsError.message);
+
+    const rolesByPerson = new Map<string, string[]>();
+    for (const m of memberships ?? []) {
+      const list = rolesByPerson.get(m.person_id as string) ?? [];
+      list.push(m.role as string);
+      rolesByPerson.set(m.person_id as string, list);
+    }
+    return results.map((person) => ({ ...person, roles: rolesByPerson.get(person.id as string) ?? [] }));
   }
 
   async updatePerson(actor: RequestActor, personId: string, patch: Record<string, unknown>) {

@@ -79,3 +79,69 @@ export function SettingsIcon(props: IconProps) {
     </svg>
   );
 }
+
+/** Menu (hambúrguer) — abre o MobileMenu em telas estreitas. */
+export function MenuIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M3 5.5h14M3 10h14M3 14.5h14" />
+    </svg>
+  );
+}
+
+/** Fechar — fecha o MobileMenu. */
+export function CloseIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M5 5l10 10M15 5 5 15" />
+    </svg>
+  );
+}
+
+/** Adicionar — botão "+ Cadastrar" (Central de Cadastros, P1). */
+export function PlusIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M10 4v12M4 10h12" />
+    </svg>
+  );
+}
+
+/** Pessoa — uma única pessoa (categoria "Pessoa" na Central de Cadastros). */
+export function PersonIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <circle cx="10" cy="7" r="3" />
+      <path d="M4 17c.6-3.4 2.8-5.3 6-5.3s5.4 1.9 6 5.3" />
+    </svg>
+  );
+}
+
+/** Cuidador — mãos/abrigo protegendo (categoria "Cuidador"). */
+export function CaregiverIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M10 3.5 3.5 6.5v4c0 4 2.8 6.5 6.5 7.5 3.7-1 6.5-3.5 6.5-7.5v-4L10 3.5Z" />
+      <path d="M7.2 10.3 9 12l3.8-4" />
+    </svg>
+  );
+}
+
+/** Tarefa — checklist com item marcado (categoria "Tarefa"). */
+export function TaskIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <rect x="3.5" y="3.5" width="13" height="13" rx="2.5" />
+      <path d="M6.5 10.3 9 12.7l4.5-5" />
+    </svg>
+  );
+}
+
+/** Solicitação — seta de ida e volta entre duas pessoas (categoria "Solicitação"). */
+export function RequestIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M4 7h10l-2.5-2.5M16 13H6l2.5 2.5" />
+    </svg>
+  );
+}
