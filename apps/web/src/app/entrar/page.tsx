@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { getSupabaseBrowserClient } from '@/lib/supabase-client';
 import { GoogleButton } from '@/components/google-auth-button';
+import { AppleButton } from '@/components/apple-auth-button';
 
 export default function EntrarPage() {
   const router = useRouter();
@@ -33,8 +34,9 @@ export default function EntrarPage() {
     <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-6 py-16">
       <h1 className="text-2xl font-semibold text-ink">Entrar</h1>
 
-      <div className="mt-8">
+      <div className="mt-8 flex flex-col gap-3">
         <GoogleButton label="Continuar com Google" />
+        <AppleButton label="Continuar com Apple" />
       </div>
 
       <div className="my-6 flex items-center gap-3 text-xs text-inkMuted" role="separator">
