@@ -1,14 +1,25 @@
 'use client';
 
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { Suspense, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { getSupabaseBrowserClient } from '@/lib/supabase-client';
 import { GoogleButton } from '@/components/google-auth-button';
 import { AppleButton } from '@/components/apple-auth-button';
+import { buildAuthUrl, resolveAuthReturnTo } from '@/lib/auth-return';
 
 export default function EntrarPage() {
+  return (
+    <Suspense fallback={<main className="min-h-screen" />}>
+      <EntrarForm />
+    </Suspense>
+  );
+}
+
+function EntrarForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const returnTo = resolveAuthReturnTo(searchParams.get('returnTo'));
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -22,7 +33,7 @@ export default function EntrarPage() {
       const supabase = getSupabaseBrowserClient();
       const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
       if (signInError) throw signInError;
-      router.push('/app/today');
+      router.push(returnTo);
     } catch (err) {
       setError('E-mail ou senha incorretos.');
     } finally {
@@ -35,8 +46,8 @@ export default function EntrarPage() {
       <h1 className="text-2xl font-semibold text-ink">Entrar</h1>
 
       <div className="mt-8 flex flex-col gap-3">
-        <GoogleButton label="Continuar com Google" />
-        <AppleButton label="Continuar com Apple" />
+        <GoogleButton label="Continuar com Google" returnTo={returnTo} />
+        <AppleButton label="Continuar com Apple" returnTo={returnTo} />
       </div>
 
       <div className="my-6 flex items-center gap-3 text-xs text-inkMuted" role="separator">
@@ -86,7 +97,7 @@ export default function EntrarPage() {
       <div className="mt-8 border-t border-border pt-6 text-center">
         <p className="text-sm text-inkMuted">Ainda não tem conta?</p>
         <Link
-          href="/cadastro"
+          href={buildAuthUrl('/cadastro', returnTo)}
           className="mt-3 inline-flex min-h-11 w-full items-center justify-center rounded-md border border-border bg-surface px-4 font-medium text-ink hover:bg-surfaceMuted"
         >
           Criar conta

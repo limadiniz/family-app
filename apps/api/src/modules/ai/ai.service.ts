@@ -655,9 +655,11 @@ export class AiService {
     if (facts.length === 0 && signals.length === 0) {
       return 'Não encontrei informações registradas para responder a essa pergunta.';
     }
+    const situation = [...new Set(facts.map((fact) => fact.summary))];
+    const attention = [...new Set(signals.map((signal) => signal.summary))];
     return [
-      ...signals.map((signal) => `- Atenção (${signal.ruleId}): ${signal.summary}`),
-      ...facts.map((fact) => `- ${fact.summary} — Fonte: ${fact.source.type}`),
+      ...situation.map((summary) => `• ${summary}`),
+      ...(attention.length > 0 ? ['', 'Pontos de atenção:', ...attention.map((summary) => `• ${summary}`)] : []),
     ].join('\n');
   }
 
@@ -709,6 +711,12 @@ function dedupeSignals(signals: DecisionSignal[]): DecisionSignal[] {
 }
 
 function formatDateTime(iso: string): string {
-  const d = new Date(iso);
-  return `${d.toISOString().slice(0, 10)} ${d.toISOString().slice(11, 16)}`;
+  return new Intl.DateTimeFormat('pt-BR', {
+    timeZone: 'America/Sao_Paulo',
+    weekday: 'short',
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(iso));
 }

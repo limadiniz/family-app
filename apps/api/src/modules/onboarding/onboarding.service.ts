@@ -25,6 +25,13 @@ export class OnboardingService {
     if (actor.tenantId && actor.personId) {
       return { tenantId: actor.tenantId, personId: actor.personId, alreadyBootstrapped: true };
     }
+    // A conta pode ter mais de uma família e chegar sem um tenant escolhido.
+    // Nunca crie um terceiro tenant nesse caso: onboarding é idempotente por
+    // conta, inclusive depois que ela aceitou um convite familiar.
+    if (actor.tenantMemberships.length > 0) {
+      const existing = actor.tenantMemberships[0]!;
+      return { tenantId: existing.tenantId, personId: existing.personId, alreadyBootstrapped: true };
+    }
     if (!actor.email) {
       throw new BadRequestException('E-mail não encontrado na sessão.');
     }

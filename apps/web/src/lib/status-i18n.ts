@@ -28,6 +28,7 @@ export type StatusDomain =
   | 'taskPriority'
   | 'responsibilityType'
   | 'careNetworkMemberStatus'
+  | 'invitationStatus'
   | 'capability';
 
 interface StatusEntry {
@@ -197,6 +198,13 @@ const DICTIONARIES: Record<StatusDomain, Record<string, StatusEntry>> = {
     ACTIVE: { label: 'Ativo', tone: 'success' },
     INACTIVE: { label: 'Inativo', tone: 'neutral' },
     PENDING: { label: 'Pendente', tone: 'warning' },
+  },
+  invitationStatus: {
+    PENDING: { label: 'Aguardando aceite', tone: 'warning' },
+    ACCEPTED: { label: 'Aceito', tone: 'success' },
+    DECLINED: { label: 'Recusado', tone: 'neutral' },
+    EXPIRED: { label: 'Expirado', tone: 'warning' },
+    REVOKED: { label: 'Cancelado', tone: 'neutral' },
   },
   // packages/domain/src/entities/care-network.ts responsibilityCapabilityKeySchema
   // — o que um cuidador PODE fazer (§23: flags de configuração, nunca checagem de papel fixa).

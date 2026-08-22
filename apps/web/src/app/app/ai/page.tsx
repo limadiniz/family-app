@@ -108,6 +108,42 @@ const MEMORY_TYPES = [
   ['CONTEXT', 'Contexto importante'],
 ] as const;
 
+const SOURCE_LABELS: Record<string, string> = {
+  calendar_events: 'Agenda da família',
+  tasks: 'Tarefas',
+  documents: 'Documentos',
+  health_profiles: 'Perfil de saúde',
+  medications: 'Medicamentos',
+  ai_memory_items: 'Memória confirmada da ZELII',
+};
+
+const DOMAIN_LABELS: Record<string, string> = {
+  SCHEDULE: 'agenda',
+  SCHOOL: 'escola',
+  HEALTH: 'saúde',
+  MEDICATION: 'medicamentos',
+  DOCUMENTS: 'documentos',
+  TRANSPORTATION: 'transporte',
+  ACTIVITIES: 'atividades',
+  AI: 'assistente',
+};
+
+const VERIFICATION_LABELS: Record<string, string> = {
+  DECLARED: 'informação cadastrada',
+  CONFIRMED: 'informação confirmada',
+  EXTRACTED: 'extraída de documento',
+  INFERRED: 'inferência a revisar',
+  OUTDATED: 'pode estar desatualizada',
+};
+
+function ruleLabel(ruleId: string): string {
+  if (ruleId.endsWith(':MISSING_TRANSPORT')) return 'Transporte ainda não definido';
+  if (ruleId.endsWith(':SIMULTANEOUS_EVENTS')) return 'Horários sobrepostos';
+  if (ruleId === 'calendar:upcoming_health_event') return 'Compromisso de saúde próximo';
+  if (ruleId === 'calendar:preparation_required') return 'Preparação recomendada';
+  return 'Regra automática da ZELII';
+}
+
 /**
  * Family Copilot (V3 §57-63). Talks ONLY to POST /api/v1/ai/ask —
  * apps/web never holds an LLM key and never queries the Family Care
@@ -552,7 +588,7 @@ export default function AiPage() {
                           {turn.answer.decision.attention.map((attention) => (
                             <li key={`${attention.ruleId}:${attention.text}`} className={`rounded-lg border p-3 text-sm ${attention.severity === 'BLOCKING' ? 'border-critical/30 bg-critical/5 text-critical' : 'border-warning/30 bg-warning/5 text-ink'}`}>
                               {attention.text}
-                              <span className="mt-1 block text-xs text-inkMuted">Cálculo: {attention.ruleId}</span>
+                              <span className="mt-1 block text-xs text-inkMuted">Verificado pela ZELII: {ruleLabel(attention.ruleId)}</span>
                             </li>
                           ))}
                         </ul>
@@ -593,13 +629,13 @@ export default function AiPage() {
                       <ul className="mt-2 space-y-2 text-xs text-inkMuted">
                         {turn.answer.decision.sources.map((source) => (
                           <li key={source.factId}>
-                            {source.label} — Fonte: {source.sourceType}
+                            {source.label} — {SOURCE_LABELS[source.sourceType] ?? 'Registro da família'}
                             {source.updatedAt ? `, atualizada em ${new Date(source.updatedAt).toLocaleString('pt-BR')}` : ''}
-                            {` · ${source.verificationStatus}`}
+                            {` · ${VERIFICATION_LABELS[source.verificationStatus] ?? 'informação registrada'}`}
                           </li>
                         ))}
                       </ul>
-                      <p className="mt-2 text-xs text-inkMuted">Domínios consultados: {turn.answer.decision.accessedScope.domains.join(', ') || 'nenhum'}.</p>
+                      <p className="mt-2 text-xs text-inkMuted">Áreas consultadas: {turn.answer.decision.accessedScope.domains.map((domain) => DOMAIN_LABELS[domain] ?? domain.toLowerCase()).join(', ') || 'nenhuma'}.</p>
                     </details>
                     {turn.answer.decision.safetyNotice && <p className="text-xs text-warning">{turn.answer.decision.safetyNotice}</p>}
                   </div>

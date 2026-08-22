@@ -15,7 +15,7 @@ import { getSupabaseBrowserClient } from '@/lib/supabase-client';
  * código. Até isso acontecer, o clique aqui mostra o erro que o Supabase
  * devolver ("provider not enabled" ou similar) em vez de fingir sucesso.
  */
-export function GoogleButton({ label }: { label: string }) {
+export function GoogleButton({ label, returnTo = '/app/today' }: { label: string; returnTo?: string }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -26,7 +26,7 @@ export function GoogleButton({ label }: { label: string }) {
       const supabase = getSupabaseBrowserClient();
       const { error: oauthError } = await supabase.auth.signInWithOAuth({
         provider: 'google',
-        options: { redirectTo: `${window.location.origin}/app/today` },
+        options: { redirectTo: `${window.location.origin}${returnTo}` },
       });
       if (oauthError) throw oauthError;
       // Em caso de sucesso o navegador já é redirecionado para o Google —

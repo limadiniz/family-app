@@ -19,7 +19,7 @@ import { getSupabaseBrowserClient } from '@/lib/supabase-client';
  * secret expirar sem renovação), o clique aqui mostra o erro que o
  * Supabase devolver em vez de fingir sucesso.
  */
-export function AppleButton({ label }: { label: string }) {
+export function AppleButton({ label, returnTo = '/app/today' }: { label: string; returnTo?: string }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -30,7 +30,7 @@ export function AppleButton({ label }: { label: string }) {
       const supabase = getSupabaseBrowserClient();
       const { error: oauthError } = await supabase.auth.signInWithOAuth({
         provider: 'apple',
-        options: { redirectTo: `${window.location.origin}/app/today` },
+        options: { redirectTo: `${window.location.origin}${returnTo}` },
       });
       if (oauthError) throw oauthError;
       // Em caso de sucesso o navegador já é redirecionado para a Apple —

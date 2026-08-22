@@ -1,20 +1,31 @@
 'use client';
 
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { Suspense, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { getSupabaseBrowserClient } from '@/lib/supabase-client';
-import { apiFetch } from '@/lib/api-client';
 import { GoogleButton } from '@/components/google-auth-button';
 import { AppleButton } from '@/components/apple-auth-button';
+import { buildAuthUrl, resolveAuthReturnTo } from '@/lib/auth-return';
 
 export default function CadastroPage() {
+  return (
+    <Suspense fallback={<main className="min-h-screen" />}>
+      <CadastroForm />
+    </Suspense>
+  );
+}
+
+function CadastroForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const returnTo = resolveAuthReturnTo(searchParams.get('returnTo'), '/app/onboarding');
   const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [confirmationSent, setConfirmationSent] = useState(false);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -22,21 +33,50 @@ export default function CadastroPage() {
     setLoading(true);
     try {
       const supabase = getSupabaseBrowserClient();
-      const { error: signUpError } = await supabase.auth.signUp({ email, password });
-      if (signUpError) throw signUpError;
-
-      // Onboarding §85 step 3+: materialize Tenant + Person + User row.
-      await apiFetch('/onboarding/bootstrap', {
-        method: 'POST',
-        body: JSON.stringify({ displayName }),
+      const { data, error: signUpError } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: { display_name: displayName },
+          emailRedirectTo: `${window.location.origin}${returnTo}`,
+        },
       });
-
-      router.push('/app/onboarding');
+      if (signUpError) throw signUpError;
+      if (data.user && data.user.identities?.length === 0) {
+        throw new Error('Este e-mail já possui uma conta. Entre com sua senha ou recupere o acesso.');
+      }
+      // With e-mail confirmation enabled Supabase intentionally returns no
+      // session. Calling our API at this point caused the registration bug:
+      // there was no bearer token yet. Bootstrap happens only after login,
+      // inside the onboarding wizard (or the invitation is accepted first).
+      if (!data.session) {
+        setConfirmationSent(true);
+        return;
+      }
+      const destination = returnTo === '/app/onboarding'
+        ? `/app/onboarding?name=${encodeURIComponent(displayName)}`
+        : returnTo;
+      router.push(destination);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não foi possível criar sua conta.');
     } finally {
       setLoading(false);
     }
+  }
+
+  if (confirmationSent) {
+    return (
+      <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-6">
+        <p className="text-sm font-medium text-primary">Conta criada</p>
+        <h1 className="mt-2 text-2xl font-semibold text-ink">Confirme seu e-mail</h1>
+        <p className="mt-3 text-sm text-inkMuted">
+          Enviamos um link para <strong className="text-ink">{email}</strong>. Depois da confirmação, você poderá continuar exatamente de onde parou.
+        </p>
+        <Link href={buildAuthUrl('/entrar', returnTo)} className="mt-6 inline-flex min-h-11 items-center justify-center rounded-md bg-primary px-4 font-medium text-white">
+          Já confirmei — entrar
+        </Link>
+      </main>
+    );
   }
 
   return (
@@ -45,8 +85,8 @@ export default function CadastroPage() {
       <p className="mt-2 text-sm text-inkMuted">Leva menos de dois minutos.</p>
 
       <div className="mt-6 flex flex-col gap-3">
-        <GoogleButton label="Continuar com Google" />
-        <AppleButton label="Continuar com Apple" />
+        <GoogleButton label="Continuar com Google" returnTo={returnTo} />
+        <AppleButton label="Continuar com Apple" returnTo={returnTo} />
       </div>
 
       <div className="my-6 flex items-center gap-3 text-xs text-inkMuted" role="separator">
@@ -99,7 +139,7 @@ export default function CadastroPage() {
       </form>
       <p className="mt-6 text-sm text-inkMuted">
         Já tem conta?{' '}
-        <Link href="/entrar" className="text-primary underline">
+        <Link href={buildAuthUrl('/entrar', returnTo)} className="text-primary underline">
           Entrar
         </Link>
       </p>

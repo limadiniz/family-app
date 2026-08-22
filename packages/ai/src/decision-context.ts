@@ -159,21 +159,23 @@ function resolveAvailableActions(domains: PermissionDomain[], signals: DecisionS
 }
 
 export function buildStructuredDecision(context: DecisionContext, answerText: string): StructuredDecision {
-  const attention = context.deterministicSignals.map((signal) => ({
-    severity: signal.severity,
-    text: signal.summary,
-    ruleId: signal.ruleId,
-  }));
+  const attention = [...new Map(context.deterministicSignals.map((signal) => [
+    `${signal.ruleId}:${signal.summary}`,
+    { severity: signal.severity, text: signal.summary, ruleId: signal.ruleId },
+  ])).values()];
   const alternatives = buildAlternatives(context);
   const hasSensitiveHealth = context.allowedDomains.some((domain) => domain === 'HEALTH' || domain === 'MEDICATION');
   return {
-    situation: answerText,
+    // Situation is deliberately factual. The model-written answer may
+    // contain explanatory signal text; reusing it here duplicated the same
+    // warnings under both “Situação” and “Atenção”.
+    situation: buildFactualSituation(context, answerText),
     attention,
     alternatives,
     suggestion: alternatives[0]
       ? {
-          text: `Considere “${alternatives[0].title}” como próximo passo revisável.`,
-          criteria: ['dados autorizados', 'sinais determinísticos', 'menor alteração necessária'],
+          text: `${alternatives[0].title} é o próximo passo mais direto. A ZELII prepara e você confirma antes de qualquer envio.`,
+          criteria: ['informações autorizadas', 'prioridade do alerta', 'menor mudança necessária'],
           uncertainty: alternatives[0].uncertainty,
         }
       : undefined,
@@ -198,37 +200,66 @@ export function buildStructuredDecision(context: DecisionContext, answerText: st
   };
 }
 
+function buildFactualSituation(context: DecisionContext, fallback: string): string {
+  const uniqueFacts = [...new Set(context.authorizedFacts.map((fact) => fact.summary.trim()).filter(Boolean))];
+  if (uniqueFacts.length === 0) return fallback;
+  return uniqueFacts.map((summary) => `• ${summary}`).join('\n');
+}
+
 function buildAlternatives(context: DecisionContext): DecisionAlternative[] {
   const alternatives: DecisionAlternative[] = [];
-  for (const signal of context.deterministicSignals.slice(0, 3)) {
+  const seen = new Set<string>();
+  const add = (alternative: DecisionAlternative, sourceKey: string) => {
+    const key = `${alternative.proposedActionType ?? alternative.title}:${sourceKey}`;
+    if (seen.has(key) || alternatives.length >= 3) return;
+    seen.add(key);
+    alternatives.push(alternative);
+  };
+
+  for (const signal of context.deterministicSignals) {
+    const sourceKey = signal.sourceRefs.map((source) => `${source.type}:${source.id}`).sort().join('|') || signal.id;
     if (signal.type === 'SCHEDULE_CONFLICT') {
-      alternatives.push({
+      const missingTransport = signal.ruleId.endsWith(':MISSING_TRANSPORT');
+      if (missingTransport) {
+        add({
+          id: `${signal.id}:assign-transport`,
+          title: 'Definir quem vai levar ou buscar',
+          impact: 'Resolve a lacuna de transporte sem mudar o horário do compromisso.',
+          informationShared: ['SCHEDULE', 'TRANSPORTATION'],
+          dependencies: ['escolher uma pessoa autorizada', 'confirmar a responsabilidade'],
+          uncertainty: 'A disponibilidade da pessoa precisa ser confirmada.',
+          proposedActionType: 'PROPOSE_RESPONSIBILITY_ASSIGNMENT',
+        }, sourceKey);
+      } else {
+        add({
+          id: `${signal.id}:adjust-schedule`,
+          title: 'Revisar um dos horários em conflito',
+          impact: 'Pode remover a sobreposição, se algum compromisso puder ser alterado.',
+          informationShared: ['SCHEDULE'],
+          dependencies: ['confirmar qual compromisso pode mudar'],
+          proposedActionType: 'PROPOSE_SCHEDULE_ADJUSTMENT',
+        }, sourceKey);
+      }
+      add({
         id: `${signal.id}:request-help`,
-        title: 'Preparar um pedido de ajuda para uma pessoa autorizada',
-        impact: 'Mantém os compromissos e redistribui somente a responsabilidade necessária.',
+        title: 'Pedir ajuda a uma pessoa autorizada',
+        impact: 'Mantém o compromisso e distribui apenas a responsabilidade necessária.',
         informationShared: ['SCHEDULE'],
         dependencies: ['escolher a pessoa', 'revisar o que será compartilhado', 'aguardar confirmação'],
-        uncertainty: 'Disponibilidade passada não garante disponibilidade atual.',
+        uncertainty: 'A disponibilidade atual ainda precisa ser confirmada.',
         proposedActionType: 'PROPOSE_REQUEST',
-      });
-      alternatives.push({
-        id: `${signal.id}:adjust-schedule`,
-        title: 'Revisar um dos horários envolvidos',
-        impact: 'Pode remover o conflito, mas depende da disponibilidade do compromisso.',
-        informationShared: ['SCHEDULE'],
-        dependencies: ['confirmar possibilidade de alteração'],
-        proposedActionType: 'PROPOSE_SCHEDULE_ADJUSTMENT',
-      });
+      }, sourceKey);
     } else if (signal.type === 'PREPARATION_INCOMPLETE' || signal.type === 'APPOINTMENT_UPCOMING') {
-      alternatives.push({
+      add({
         id: `${signal.id}:checklist`,
-        title: 'Preparar uma checklist para revisão',
+        title: 'Preparar a checklist do compromisso',
         impact: 'Reduz esquecimentos sem alterar agenda ou responsabilidade.',
         informationShared: [],
         dependencies: ['revisão humana antes de concluir'],
         proposedActionType: 'PROPOSE_PREPARATION_CHECKLIST',
-      });
+      }, sourceKey);
     }
+    if (alternatives.length >= 3) break;
   }
   return alternatives;
 }

@@ -127,9 +127,62 @@ describe('Structured decision evals', () => {
     };
 
     const decision = buildStructuredDecision(context, 'Pedro tem dentista às 10h.');
+    expect(decision.situation).toBe('• Dentista às 10h');
     expect(decision.attention[0]?.ruleId).toContain('conflict_engine');
     expect(decision.sources[0]?.sourceId).toBe('event-1');
-    expect(decision.alternatives[0]?.proposedActionType).toBe('PROPOSE_REQUEST');
+    expect(decision.alternatives[0]?.proposedActionType).toBe('PROPOSE_SCHEDULE_ADJUSTMENT');
     expect(decision.safetyNotice).toMatch(/não substitui/i);
+  });
+
+  it('does not duplicate checklists and prioritizes assigning transport when transport is missing', () => {
+    const source = [{ type: 'calendar_events', id: 'event-transport' }];
+    const context = {
+      actor,
+      questionIntent: 'SCHEDULE',
+      subjectPersonIds: ['pedro'],
+      authorizedFacts: [],
+      deterministicSignals: [
+        {
+          id: 'missing-transport',
+          type: 'SCHEDULE_CONFLICT' as const,
+          severity: 'ATTENTION' as const,
+          summary: 'Ainda não tem quem leve ou busque.',
+          subjectPersonIds: ['pedro'],
+          sourceRefs: source,
+          calculatedAt: '2026-08-22T10:00:00Z',
+          ruleId: 'conflict_engine:MISSING_TRANSPORT',
+        },
+        {
+          id: 'appointment',
+          type: 'APPOINTMENT_UPCOMING' as const,
+          severity: 'INFO' as const,
+          summary: 'Consulta próxima.',
+          subjectPersonIds: ['pedro'],
+          sourceRefs: source,
+          calculatedAt: '2026-08-22T10:00:00Z',
+          ruleId: 'calendar:upcoming_health_event',
+        },
+        {
+          id: 'preparation',
+          type: 'PREPARATION_INCOMPLETE' as const,
+          severity: 'ATTENTION' as const,
+          summary: 'Preparação necessária.',
+          subjectPersonIds: ['pedro'],
+          sourceRefs: source,
+          calculatedAt: '2026-08-22T10:00:00Z',
+          ruleId: 'calendar:preparation_required',
+        },
+      ],
+      deniedDomains: [],
+      allowedDomains: ['SCHEDULE' as const],
+      authorizedScopes: [],
+      availableActions: ['PROPOSE_REQUEST' as const],
+    };
+
+    const decision = buildStructuredDecision(context, 'Resumo determinístico.');
+    expect(decision.alternatives[0]?.proposedActionType).toBe('PROPOSE_RESPONSIBILITY_ASSIGNMENT');
+    expect(decision.alternatives).toHaveLength(3);
+    expect(decision.alternatives.filter((item) => item.proposedActionType === 'PROPOSE_PREPARATION_CHECKLIST')).toHaveLength(1);
+    expect(decision.alternatives.some((item) => item.proposedActionType === 'PROPOSE_SCHEDULE_ADJUSTMENT')).toBe(false);
   });
 });

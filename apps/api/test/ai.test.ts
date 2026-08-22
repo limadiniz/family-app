@@ -279,7 +279,9 @@ describe('AiService.ask — enabled, provider configured', () => {
     });
     const answer = await service.ask(ANA, 'O que fazer sobre a saúde de Pedro?', ['pedro']);
     expect(answer.text).not.toContain('Aumente a dose');
-    expect(answer.text).toContain('Fonte: health_profiles');
+    expect(answer.decision?.sources).toEqual([
+      expect.objectContaining({ sourceType: 'health_profiles', verificationStatus: 'DECLARED' }),
+    ]);
   });
 });
 

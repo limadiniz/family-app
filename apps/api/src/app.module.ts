@@ -13,6 +13,7 @@ import { CareScheduleModule } from './modules/care-schedule/care-schedule.module
 import { CareBriefModule } from './modules/care-brief/care-brief.module';
 import { AiModule } from './modules/ai/ai.module';
 import { BriefingModule } from './modules/briefing/briefing.module';
+import { InvitationsModule } from './modules/invitations/invitations.module';
 
 @Module({
   imports: [
@@ -30,6 +31,7 @@ import { BriefingModule } from './modules/briefing/briefing.module';
     CareBriefModule,
     AiModule,
     BriefingModule,
+    InvitationsModule,
   ],
 })
 export class AppModule {}

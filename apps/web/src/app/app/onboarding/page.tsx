@@ -48,7 +48,7 @@ function OnboardingWizard() {
   const searchParams = useSearchParams();
   const [returnTo] = useState(() => resolveSafeReturnTo(searchParams.get('returnTo')));
   const [step, setStep] = useState(1);
-  const [ownerName, setOwnerName] = useState('');
+  const [ownerName, setOwnerName] = useState(() => searchParams.get('name')?.trim() ?? '');
   const [familyUnitId, setFamilyUnitId] = useState<string | null>(null);
   const [familyUnitName, setFamilyUnitName] = useState('');
   const [childName, setChildName] = useState('');
