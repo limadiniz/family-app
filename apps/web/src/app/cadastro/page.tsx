@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { getSupabaseBrowserClient } from '@/lib/supabase-client';
 import { apiFetch } from '@/lib/api-client';
+import { GoogleButton } from '@/components/google-auth-button';
 
 export default function CadastroPage() {
   const router = useRouter();
@@ -41,7 +42,18 @@ export default function CadastroPage() {
     <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-6">
       <h1 className="text-2xl font-semibold text-ink">Criar sua conta</h1>
       <p className="mt-2 text-sm text-inkMuted">Leva menos de dois minutos.</p>
-      <form onSubmit={handleSubmit} className="mt-8 flex flex-col gap-4">
+
+      <div className="mt-6">
+        <GoogleButton label="Continuar com Google" />
+      </div>
+
+      <div className="my-6 flex items-center gap-3 text-xs text-inkMuted" role="separator">
+        <span className="h-px flex-1 bg-border" aria-hidden="true" />
+        ou
+        <span className="h-px flex-1 bg-border" aria-hidden="true" />
+      </div>
+
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4">
         <label className="flex flex-col gap-1 text-sm text-ink">
           Seu nome
           <input
