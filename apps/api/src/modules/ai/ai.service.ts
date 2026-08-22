@@ -1,12 +1,31 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { AiGateway } from '@family-app/ai';
 import type { RetrievalRequest, RetrievedFact } from '@family-app/ai';
+import { permissionDomainSchema } from '@family-app/domain';
+import type { PermissionDomain } from '@family-app/domain';
+import { z } from 'zod';
 import type { RequestActor } from '../../common/auth.guard';
 import { AuditService } from '../../common/audit.service';
 import { PolicyService } from '../../common/policy.service';
 import { SupabaseService } from '../../common/supabase.service';
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
+
+const memoryTypeSchema = z.enum(['PREFERENCE', 'ROUTINE', 'CONSTRAINT', 'DECISION', 'CONTEXT']);
+const createMemorySchema = z.object({
+  subjectPersonId: z.string().min(1),
+  domain: permissionDomainSchema,
+  memoryType: memoryTypeSchema,
+  summary: z.string().trim().min(1).max(500),
+  sourceRefs: z
+    .array(z.object({ type: z.string().trim().min(1).max(80), id: z.string().trim().max(200).optional() }))
+    .max(10)
+    .default([]),
+  validUntil: z.string().datetime({ offset: true }).nullable().optional(),
+  confirmed: z.literal(true),
+});
+
+export type CreateAiMemoryInput = z.input<typeof createMemorySchema>;
 
 /**
  * Context Engine + Family Copilot wiring (V3 §57-63) — this is the
@@ -71,33 +90,179 @@ export class AiService {
     return { ...answer, suggestedAction: this.suggestAction(question, subjectPersonIds, answer.facts) };
   }
 
+  async listMemory(actor: RequestActor, subjectPersonId: string) {
+    if (!subjectPersonId) throw new BadRequestException('Informe a pessoa da memória.');
+    await this.policy.authorizeOrThrow(actor, 'VIEW', 'AI', subjectPersonId, { purpose: 'review_ai_memory' });
+
+    const { data, error } = await this.db(actor)
+      .from('ai_memory_items')
+      .select('id, subject_person_id, domain, memory_type, summary, source_refs, valid_until, last_verified_at, created_at')
+      .eq('subject_person_id', subjectPersonId)
+      .eq('revoked_at', null)
+      .order('created_at', { ascending: false });
+    if (error) throw new BadRequestException(error.message);
+
+    const now = Date.now();
+    const rows = (data ?? []).filter((row) => !row.valid_until || new Date(row.valid_until as string).getTime() >= now);
+    const allowedDomains = new Map<PermissionDomain, boolean>();
+    for (const domain of new Set(rows.map((row) => row.domain as PermissionDomain))) {
+      const allowed = await this.policy
+        .authorizeOrThrow(actor, 'VIEW', domain, subjectPersonId, { purpose: 'review_ai_memory' })
+        .then(() => true)
+        .catch(() => false);
+      allowedDomains.set(domain, allowed);
+    }
+    return rows.filter((row) => allowedDomains.get(row.domain as PermissionDomain));
+  }
+
+  async createMemory(actor: RequestActor, input: CreateAiMemoryInput) {
+    const parsed = createMemorySchema.safeParse(input);
+    if (!parsed.success) {
+      throw new BadRequestException(parsed.error.issues[0]?.message ?? 'Memória inválida.');
+    }
+    const value = parsed.data;
+    if (value.validUntil && new Date(value.validUntil).getTime() <= Date.now()) {
+      throw new BadRequestException('A validade da memória deve estar no futuro.');
+    }
+
+    await this.policy.authorizeOrThrow(actor, 'CREATE', 'AI', value.subjectPersonId, {
+      confirmed: true,
+      purpose: 'create_confirmed_ai_memory',
+    });
+    await this.policy.authorizeOrThrow(actor, 'EDIT', value.domain, value.subjectPersonId, {
+      confirmed: true,
+      purpose: 'create_confirmed_ai_memory',
+    });
+
+    const { data, error } = await this.db(actor)
+      .from('ai_memory_items')
+      .insert({
+        tenant_id: actor.tenantId,
+        subject_person_id: value.subjectPersonId,
+        domain: value.domain,
+        memory_type: value.memoryType,
+        summary: value.summary,
+        source_refs: value.sourceRefs,
+        valid_until: value.validUntil ?? null,
+        created_by_person_id: actor.personId,
+        confirmed_by_person_id: actor.personId,
+      })
+      .select('*')
+      .single();
+    if (error) throw new BadRequestException(error.message);
+
+    await this.audit.record(actor, {
+      eventType: 'AI_ACTION',
+      subjectPersonId: value.subjectPersonId,
+      resourceType: 'ai_memory_items',
+      resourceId: data.id as string,
+      result: 'SUCCESS',
+      context: { action: 'MEMORY_CONFIRMED', domain: value.domain, memoryType: value.memoryType },
+    });
+    return data;
+  }
+
+  async revokeMemory(actor: RequestActor, memoryId: string) {
+    const { data: memory, error: findError } = await this.db(actor)
+      .from('ai_memory_items')
+      .select('id, subject_person_id, domain')
+      .eq('id', memoryId)
+      .eq('revoked_at', null)
+      .maybeSingle();
+    if (findError) throw new BadRequestException(findError.message);
+    if (!memory) throw new NotFoundException('Memória não encontrada ou já revogada.');
+
+    const domain = permissionDomainSchema.parse(memory.domain);
+    await this.policy.authorizeOrThrow(actor, 'EDIT', 'AI', memory.subject_person_id as string, {
+      confirmed: true,
+      purpose: 'revoke_ai_memory',
+    });
+    await this.policy.authorizeOrThrow(actor, 'EDIT', domain, memory.subject_person_id as string, {
+      confirmed: true,
+      purpose: 'revoke_ai_memory',
+    });
+
+    const { error } = await this.db(actor)
+      .from('ai_memory_items')
+      .update({ revoked_at: new Date().toISOString() })
+      .eq('id', memoryId);
+    if (error) throw new BadRequestException(error.message);
+
+    await this.audit.record(actor, {
+      eventType: 'AI_ACTION',
+      subjectPersonId: memory.subject_person_id as string,
+      resourceType: 'ai_memory_items',
+      resourceId: memoryId,
+      result: 'SUCCESS',
+      context: { action: 'MEMORY_REVOKED', domain },
+    });
+    return { id: memoryId, revoked: true };
+  }
+
   // ------------------------------------------------------------ retrieve
 
   private async retrieve(actor: RequestActor, request: RetrievalRequest): Promise<RetrievedFact[]> {
+    let facts: RetrievedFact[];
     switch (request.domain) {
       case 'SCHEDULE':
-        return this.retrieveCalendarEvents(actor, request.subjectPersonId, 'SCHEDULE');
+        facts = await this.retrieveCalendarEvents(actor, request.subjectPersonId, 'SCHEDULE');
+        break;
       case 'SCHOOL':
-        return this.retrieveCalendarEvents(actor, request.subjectPersonId, 'SCHOOL', 'SCHOOL');
+        facts = await this.retrieveCalendarEvents(actor, request.subjectPersonId, 'SCHOOL', 'SCHOOL');
+        break;
       case 'ACTIVITIES':
-        return this.retrieveCalendarEvents(actor, request.subjectPersonId, 'ACTIVITIES', 'SPORT');
+        facts = await this.retrieveCalendarEvents(actor, request.subjectPersonId, 'ACTIVITIES', 'SPORT');
+        break;
       case 'FINANCE':
-        return this.retrieveCalendarEvents(actor, request.subjectPersonId, 'FINANCE', 'FINANCE');
+        facts = await this.retrieveCalendarEvents(actor, request.subjectPersonId, 'FINANCE', 'FINANCE');
+        break;
       case 'MEDICATION':
-        return this.retrieveMedications(actor, request.subjectPersonId);
+        facts = await this.retrieveMedications(actor, request.subjectPersonId);
+        break;
       case 'HEALTH':
-        return this.retrieveHealthProfile(actor, request.subjectPersonId);
+        facts = await this.retrieveHealthProfile(actor, request.subjectPersonId);
+        break;
       case 'EMERGENCY':
-        return this.retrieveEmergencyProfile(actor, request.subjectPersonId);
+        facts = await this.retrieveEmergencyProfile(actor, request.subjectPersonId);
+        break;
       case 'DOCUMENTS':
-        return this.retrieveDocuments(actor, request.subjectPersonId);
+        facts = await this.retrieveDocuments(actor, request.subjectPersonId);
+        break;
       default:
-        // No retrieval implemented yet for this domain (PROFILE, VACCINATION,
-        // TRANSPORTATION, CONTACTS, NOTES, LOCATION, AI, AUDIT) — returning
-        // an empty fact list is the honest answer; AiGateway already turns
-        // "zero facts" into "não encontrei informações", never a guess.
-        return [];
+        facts = [];
     }
+    const memoryFacts = await this.retrieveMemoryFacts(actor, request.subjectPersonId, request.domain);
+    return [...facts, ...memoryFacts];
+  }
+
+  private async retrieveMemoryFacts(
+    actor: RequestActor,
+    subjectPersonId: string,
+    domain: PermissionDomain,
+  ): Promise<RetrievedFact[]> {
+    const { data, error } = await this.db(actor)
+      .from('ai_memory_items')
+      .select('id, summary, valid_until, last_verified_at')
+      .eq('subject_person_id', subjectPersonId)
+      .eq('domain', domain)
+      .eq('revoked_at', null)
+      .order('last_verified_at', { ascending: false })
+      .limit(20);
+    if (error || !data) return [];
+
+    const now = Date.now();
+    return data
+      .filter((memory) => !memory.valid_until || new Date(memory.valid_until as string).getTime() >= now)
+      .map((memory) => ({
+        domain,
+        subjectPersonId,
+        summary: `Memória confirmada: ${memory.summary as string}`,
+        source: {
+          type: 'ai_memory_items',
+          id: memory.id as string,
+          occurredAt: memory.last_verified_at as string,
+        },
+      }));
   }
 
   private async retrieveCalendarEvents(

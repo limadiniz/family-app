@@ -311,6 +311,134 @@ export class CommandCenterService {
     };
   }
 
+  /**
+   * Plano da Família — compõe, em uma única resposta de produto, o dia
+   * de todas as pessoas cujo SCHEDULE o ator pode visualizar. A fonte de
+   * verdade continua sendo `getToday`: cada pessoa passa pela mesma
+   * autorização e pelas mesmas regras já testadas. Depois da composição,
+   * rodamos o Conflict Engine novamente sobre os eventos combinados para
+   * capturar conflitos que atravessam irmãos/responsáveis — algo que uma
+   * consulta isolada por pessoa não consegue enxergar.
+   */
+  async getFamilyPlan(actor: RequestActor, dayIso: string) {
+    const { data: peopleRows, error } = await this.db(actor)
+      .from('persons')
+      .select('id, display_name, person_type')
+      .order('display_name');
+    if (error) throw new BadRequestException(error.message);
+
+    const visiblePeople: Array<{ id: string; displayName: string; personType: string }> = [];
+    for (const row of peopleRows ?? []) {
+      const id = row.id as string;
+      const allowed = await this.policy
+        .authorizeOrThrow(actor, 'VIEW', 'SCHEDULE', id, { purpose: 'family_plan' })
+        .then(() => true)
+        .catch(() => false);
+      if (allowed) {
+        visiblePeople.push({
+          id,
+          displayName: row.display_name as string,
+          personType: row.person_type as string,
+        });
+      }
+    }
+
+    // Dependentes são o foco natural do plano. Se o tenant ainda não
+    // possui nenhum, mantemos os adultos visíveis para não produzir uma
+    // tela vazia durante a ativação inicial.
+    const dependents = visiblePeople.filter((person) => person.personType !== 'ADULT');
+    const planPeople = dependents.length > 0 ? dependents : visiblePeople;
+    const tomorrowIso = addIsoDays(dayIso, 1);
+
+    const [todayPlans, tomorrowPlans] = await Promise.all([
+      Promise.all(planPeople.map(async (person) => ({ person, plan: await this.getToday(actor, person.id, dayIso) }))),
+      Promise.all(planPeople.map(async (person) => ({ person, plan: await this.getToday(actor, person.id, tomorrowIso) }))),
+    ]);
+
+    type PlanPerson = (typeof planPeople)[number];
+    type PlanResource = Record<string, unknown> & { person: PlanPerson };
+    const withPerson = (rows: unknown[], person: PlanPerson): PlanResource[] =>
+      rows.map((row) => ({ ...(row as Record<string, unknown>), person }));
+
+    const todayEvents: PlanResource[] = todayPlans.flatMap(({ person, plan }) => withPerson(plan.events, person));
+    const todayTasks: PlanResource[] = todayPlans.flatMap(({ person, plan }) => withPerson(plan.tasks, person));
+    const tomorrowEvents: PlanResource[] = tomorrowPlans.flatMap(({ person, plan }) =>
+      withPerson(plan.events, person),
+    );
+    const tomorrowTasks: PlanResource[] = tomorrowPlans.flatMap(({ person, plan }) =>
+      withPerson(plan.tasks, person),
+    );
+
+    const crossPersonConflicts = detectConflicts({
+      events: todayEvents.map((event) => ({
+        id: event.id as string,
+        subjectPersonId: event.subject_person_id as string,
+        title: event.title as string,
+        category: event.category as string,
+        startsAt: event.starts_at as string,
+        endsAt: (event.ends_at as string | null) ?? null,
+        responsiblePersonId: (event.responsible_person_id as string | null) ?? null,
+        transportationPersonId: (event.transportation_person_id as string | null) ?? null,
+      })),
+      careWindows: [],
+      responsibilityAssignments: [],
+      handoffs: [],
+    });
+
+    const conflictsByKey = new Map<string, (typeof crossPersonConflicts)[number]>();
+    for (const conflict of [
+      ...todayPlans.flatMap(({ plan }) => plan.conflicts),
+      ...crossPersonConflicts,
+    ]) {
+      const key = `${conflict.type}:${[...conflict.involvedResourceIds].sort().join(',')}`;
+      conflictsByKey.set(key, conflict);
+    }
+
+    const dayEnd = `${dayIso}T23:59:59.999Z`;
+    const attentionTasks = todayTasks.filter((task) => {
+      const dueAt = task.due_at as string | null;
+      return !!dueAt && dueAt <= dayEnd && !['DONE', 'CANCELLED'].includes(task.status as string);
+    });
+
+    const preparations = tomorrowEvents.map((event) => ({
+      id: `event:${event.id as string}`,
+      eventId: event.id as string,
+      subjectPersonId: event.subject_person_id as string,
+      person: event.person,
+      title: `Revisar o que precisa levar para “${event.title as string}”`,
+      startsAt: event.starts_at as string,
+      category: event.category as string,
+      source: 'CALENDAR_EVENT' as const,
+      requiresConfirmation: true,
+    }));
+
+    const confirmed = todayEvents.filter(
+      (event) => !!event.responsible_person_id || !!event.transportation_person_id,
+    );
+
+    return {
+      date: dayIso,
+      tomorrowDate: tomorrowIso,
+      people: visiblePeople,
+      subjects: planPeople,
+      needsAttention: {
+        conflicts: Array.from(conflictsByKey.values()),
+        tasks: attentionTasks,
+      },
+      today: {
+        events: todayEvents,
+        tasks: todayTasks,
+        routines: todayPlans.flatMap(({ person, plan }) => withPerson(plan.routines, person)),
+      },
+      tomorrow: {
+        events: tomorrowEvents,
+        tasks: tomorrowTasks,
+        preparations,
+      },
+      confirmed,
+    };
+  }
+
   // ------------------------------------------------------------- helpers
 
   private async filterViewable<T>(actor: RequestActor, rows: T[], subjectOf: (row: T) => string): Promise<T[]> {
@@ -324,4 +452,10 @@ export class CommandCenterService {
     }
     return results;
   }
+}
+
+function addIsoDays(dayIso: string, days: number): string {
+  const date = new Date(`${dayIso}T12:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
 }

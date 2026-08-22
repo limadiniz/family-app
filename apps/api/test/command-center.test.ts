@@ -69,3 +69,65 @@ describe('CommandCenterService.getToday — Conflict Engine wiring (§43)', () =
     expect(today.conflicts).toEqual([]);
   });
 });
+
+describe('CommandCenterService.getFamilyPlan', () => {
+  it('combines dependents, tomorrow preparation and cross-family conflicts', async () => {
+    const { client } = makeFakeSupabaseClient({
+      persons: {
+        data: [
+          { id: 'ana', display_name: 'Ana', person_type: 'ADULT' },
+          { id: 'bia', display_name: 'Bia', person_type: 'MINOR' },
+          { id: 'leo', display_name: 'Leo', person_type: 'MINOR' },
+        ],
+        error: null,
+      },
+    });
+    const service = new CommandCenterService(
+      { forUser: () => client } as unknown as SupabaseService,
+      { authorizeOrThrow: vi.fn().mockResolvedValue(undefined) } as unknown as PolicyService,
+      { record: vi.fn().mockResolvedValue(undefined) } as unknown as AuditService,
+    );
+
+    vi.spyOn(service, 'getToday').mockImplementation(async (_actor, personId, day) => ({
+      date: day,
+      events:
+        day === '2026-08-20'
+          ? [
+              {
+                id: `event-${personId}`,
+                subject_person_id: personId,
+                title: personId === 'bia' ? 'Saída da escola' : 'Dentista',
+                category: personId === 'bia' ? 'SCHOOL' : 'HEALTH',
+                starts_at: '2026-08-20T10:00:00Z',
+                ends_at: '2026-08-20T11:00:00Z',
+                responsible_person_id: 'ana',
+                transportation_person_id: 'ana',
+              },
+            ]
+          : [
+              {
+                id: `tomorrow-${personId}`,
+                subject_person_id: personId,
+                title: 'Aula',
+                category: 'SCHOOL',
+                starts_at: '2026-08-21T08:00:00Z',
+                ends_at: '2026-08-21T09:00:00Z',
+                responsible_person_id: null,
+                transportation_person_id: null,
+              },
+            ],
+      tasks: [],
+      routines: [],
+      conflicts: [],
+    }));
+
+    const plan = await service.getFamilyPlan(ANA, '2026-08-20');
+
+    expect(plan.people).toHaveLength(3);
+    expect(plan.subjects.map((person) => person.id)).toEqual(['bia', 'leo']);
+    expect(plan.today.events).toHaveLength(2);
+    expect(plan.tomorrow.preparations).toHaveLength(2);
+    expect(plan.tomorrow.preparations.every((item) => item.requiresConfirmation)).toBe(true);
+    expect(plan.needsAttention.conflicts.some((conflict) => conflict.type === 'UNAVAILABLE_RESPONSIBLE')).toBe(true);
+  });
+});

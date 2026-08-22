@@ -54,6 +54,39 @@ describe('detectConflicts', () => {
     expect(conflicts.filter((c) => c.type === 'UNAVAILABLE_RESPONSIBLE')).toHaveLength(1);
   });
 
+  it('flags UNAVAILABLE_RESPONSIBLE when one caregiver is assigned to overlapping events for two children', () => {
+    const conflicts = detectConflicts({
+      ...EMPTY,
+      events: [
+        {
+          id: 'school-ana',
+          subjectPersonId: 'child-ana',
+          title: 'Saída da escola',
+          category: 'SCHOOL',
+          startsAt: '2026-08-20T10:00:00Z',
+          endsAt: '2026-08-20T11:00:00Z',
+          responsiblePersonId: null,
+          transportationPersonId: 'parent-1',
+        },
+        {
+          id: 'dentist-luiz',
+          subjectPersonId: 'child-luiz',
+          title: 'Dentista',
+          category: 'HEALTH',
+          startsAt: '2026-08-20T10:30:00Z',
+          endsAt: '2026-08-20T11:30:00Z',
+          responsiblePersonId: 'parent-1',
+          transportationPersonId: 'parent-1',
+        },
+      ],
+    });
+
+    expect(conflicts.filter((conflict) => conflict.type === 'UNAVAILABLE_RESPONSIBLE')).toHaveLength(1);
+    expect(conflicts.find((conflict) => conflict.type === 'UNAVAILABLE_RESPONSIBLE')?.involvedPersonIds).toContain(
+      'parent-1',
+    );
+  });
+
   it('flags CHILD_IN_TWO_RESIDENCES for overlapping CareWindows with different caregivers AND different residences', () => {
     const conflicts = detectConflicts({
       ...EMPTY,

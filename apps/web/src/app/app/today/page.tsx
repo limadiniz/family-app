@@ -1,44 +1,64 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { apiFetch } from '@/lib/api-client';
-import { PageHeader, PersonPicker, PersonAvatar, StatusBadge, Card, EmptyState, LoadingState, ErrorState, type PersonSummary } from '@/components/ui';
+import { Button, Card, EmptyState, ErrorState, LoadingState, PageHeader, PersonAvatar, StatusBadge } from '@/components/ui';
 
-interface Person {
+interface PlanPerson {
   id: string;
-  display_name: string;
-  person_type: string;
+  displayName: string;
+  personType: string;
 }
 
-interface Conflict {
-  type: string;
-  severity: 'ATTENTION' | 'BLOCKING';
-  message: string;
-}
-
-interface TodayEvent {
+interface PlannedEvent {
   id: string;
   title: string;
   starts_at: string;
   category: string;
   responsible_person_id: string | null;
+  transportation_person_id: string | null;
+  person: PlanPerson;
 }
 
-interface TodayTask {
+interface PlannedTask {
   id: string;
   title: string;
   status: string;
   due_at: string | null;
   responsible_person_id: string | null;
+  person: PlanPerson;
 }
 
-interface TodayResponse {
+interface PlanConflict {
+  type: string;
+  severity: 'ATTENTION' | 'BLOCKING';
+  message: string;
+  involvedPersonIds: string[];
+  involvedResourceIds: string[];
+}
+
+interface PreparationItem {
+  id: string;
+  eventId: string;
+  subjectPersonId: string;
+  person: PlanPerson;
+  title: string;
+  startsAt: string;
+  category: string;
+  source: 'CALENDAR_EVENT';
+  requiresConfirmation: boolean;
+}
+
+interface FamilyPlanResponse {
   date: string;
-  events: TodayEvent[];
-  tasks: TodayTask[];
-  routines: Array<{ id: string; title: string; routine_items: Array<{ id: string; title: string; completed_at: string | null }> }>;
-  conflicts: Conflict[];
+  tomorrowDate: string;
+  people: PlanPerson[];
+  subjects: PlanPerson[];
+  needsAttention: { conflicts: PlanConflict[]; tasks: PlannedTask[] };
+  today: { events: PlannedEvent[]; tasks: PlannedTask[]; routines: Array<Record<string, unknown>> };
+  tomorrow: { events: PlannedEvent[]; tasks: PlannedTask[]; preparations: PreparationItem[] };
+  confirmed: PlannedEvent[];
 }
 
 interface ActivityItem {
@@ -47,215 +67,323 @@ interface ActivityItem {
   eventType: string;
 }
 
+function localDayIso(date = new Date()): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function formatTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+}
+
+function personSummary(person: PlanPerson) {
+  return { id: person.id, displayName: person.displayName, isMinor: person.personType !== 'ADULT' };
+}
+
 /**
- * "Hoje" — a central de decisões (§7): não é uma lista de dados, é a
- * resposta a três perguntas — o que chegou, o que precisa acontecer
- * hoje, e quem está cuidando de cada coisa. Agrega agenda + tarefas +
- * rotinas via GET /api/v1/today, mais o feed de atividade da rede.
+ * Plano da Família — visão unificada de todas as pessoas autorizadas.
+ * A composição acontece no backend para que conflitos entre irmãos e a
+ * filtragem do Policy Engine não sejam reimplementados no navegador.
  */
 export default function TodayPage() {
-  const [people, setPeople] = useState<Person[] | null>(null);
-  const [selectedPersonId, setSelectedPersonId] = useState<string | null>(null);
-  const [today, setToday] = useState<TodayResponse | null>(null);
+  const [plan, setPlan] = useState<FamilyPlanResponse | null>(null);
   const [activity, setActivity] = useState<ActivityItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [createdPreparationIds, setCreatedPreparationIds] = useState<Set<string>>(new Set());
+  const [preparationError, setPreparationError] = useState<string | null>(null);
 
-  const loadPeople = useCallback(() => {
+  const load = useCallback(() => {
     setError(null);
-    apiFetch<Person[]>('/persons')
-      .then((list) => {
-        setPeople(list);
-        if (list.length > 0) setSelectedPersonId((current) => current ?? list[0].id);
-      })
-      .catch((err) => setError(err.message));
-    apiFetch<ActivityItem[]>('/activity-feed?limit=10')
-      .then(setActivity)
-      .catch(() => setActivity([])); // widget não crítico — falha em silêncio (§7)
-  }, []);
-
-  useEffect(loadPeople, [loadPeople, reloadKey]);
-
-  useEffect(() => {
-    if (!selectedPersonId) return;
-    setToday(null);
-    apiFetch<TodayResponse>(`/today?subjectPersonId=${selectedPersonId}`)
-      .then((res) => {
-        // A malformed response (wrong shape — an unexpected backend change, a
-        // proxy mangling the body, ...) must not reach the render below as if
-        // it were valid data: `today.conflicts.length` etc. would throw
-        // during render, an uncaught crash with no boundary above this page
-        // to contain it (§7: an error here must stay an error HERE, never
-        // take down the whole shell).
+    setPlan(null);
+    const date = localDayIso();
+    apiFetch<FamilyPlanResponse>(`/family-plan?date=${date}`)
+      .then((response) => {
         const valid =
-          res && Array.isArray(res.events) && Array.isArray(res.tasks) && Array.isArray(res.routines) && Array.isArray(res.conflicts);
+          response &&
+          Array.isArray(response.people) &&
+          Array.isArray(response.subjects) &&
+          Array.isArray(response.today?.events) &&
+          Array.isArray(response.tomorrow?.preparations) &&
+          Array.isArray(response.needsAttention?.conflicts);
         if (!valid) throw new Error('Resposta inesperada do servidor.');
-        setToday(res);
+        setPlan(response);
       })
       .catch((err) => setError(err instanceof Error ? err.message : 'Erro inesperado.'));
-  }, [selectedPersonId, reloadKey]);
 
-  // "quem está cuidando" — resolve responsible_person_id pro nome real,
-  // usando a mesma lista já carregada. Nunca mostra um id cru.
-  function responsibleName(personId: string | null): string | null {
-    if (!personId) return null;
-    if (personId === selectedPersonId) return null; // a própria pessoa selecionada — redundante mostrar
-    return people?.find((p) => p.id === personId)?.display_name ?? null;
+    apiFetch<ActivityItem[]>('/activity-feed?limit=8')
+      .then(setActivity)
+      .catch(() => setActivity([]));
+  }, []);
+
+  useEffect(load, [load, reloadKey]);
+
+  const peopleById = useMemo(() => new Map((plan?.people ?? []).map((person) => [person.id, person])), [plan]);
+
+  function responsibleLabel(event: PlannedEvent): string | null {
+    const responsibleId = event.transportation_person_id ?? event.responsible_person_id;
+    if (!responsibleId) return null;
+    return peopleById.get(responsibleId)?.displayName ?? 'Responsável definido';
   }
 
-  const personSummaries: PersonSummary[] = (people ?? []).map((p) => ({
-    id: p.id,
-    displayName: p.display_name,
-    isMinor: p.person_type !== 'ADULT',
-  }));
+  async function createPreparationTask(item: PreparationItem) {
+    if (!window.confirm(`Criar esta tarefa para ${item.person.displayName}?\n\n${item.title}`)) return;
+    setPreparationError(null);
+    try {
+      await apiFetch('/tasks', {
+        method: 'POST',
+        body: JSON.stringify({
+          subjectPersonId: item.subjectPersonId,
+          title: item.title,
+          description: `Criada a partir do compromisso de ${item.person.displayName}.`,
+          dueAt: item.startsAt,
+          priority: 'MEDIUM',
+        }),
+      });
+      setCreatedPreparationIds((ids) => new Set(ids).add(item.id));
+    } catch (err) {
+      setPreparationError(err instanceof Error ? err.message : 'Não foi possível criar a tarefa.');
+    }
+  }
 
-  const loading = people === null || (selectedPersonId !== null && today === null && !error);
+  const needsAttentionCount =
+    (plan?.needsAttention.conflicts.length ?? 0) + (plan?.needsAttention.tasks.length ?? 0);
 
   return (
-    <div className="max-w-2xl">
+    <div className="mx-auto max-w-5xl">
       <PageHeader
-        title="Hoje"
+        title="Plano da Família"
         description={new Intl.DateTimeFormat('pt-BR', { weekday: 'long', day: '2-digit', month: 'long' }).format(new Date())}
         actions={
-          people && people.length > 1 ? (
-            <PersonPicker people={personSummaries} value={selectedPersonId} onChange={setSelectedPersonId} />
-          ) : undefined
+          <Link
+            href="/app/cadastros"
+            className="inline-flex min-h-touch items-center justify-center rounded-md bg-primary px-4 text-sm font-semibold text-white hover:opacity-90"
+          >
+            + Cadastrar
+          </Link>
         }
       />
 
       {error && (
         <div className="mt-8">
-          <ErrorState title="Não foi possível carregar o seu Hoje" description={error} onRetry={() => setReloadKey((k) => k + 1)} />
+          <ErrorState title="Não foi possível montar o Plano da Família" description={error} onRetry={() => setReloadKey((key) => key + 1)} />
         </div>
       )}
 
-      {!error && people && people.length === 0 && (
+      {!error && !plan && <LoadingState label="Organizando o plano da família…" />}
+
+      {!error && plan && plan.subjects.length === 0 && (
         <div className="mt-8">
           <EmptyState
-            title="Sua família ainda não tem ninguém cadastrado"
-            description="Cadastre ao menos uma pessoa para a ZELII começar a organizar o dia a dia dela."
+            title="Adicione quem faz parte da sua rotina"
+            description="A ZELII precisa de ao menos uma pessoa para organizar compromissos, tarefas e responsabilidades."
           />
-          <Link href="/app/onboarding" className="mt-3 inline-block text-sm text-primary underline">
-            Continuar cadastro
+          <Link href="/app/cadastros/pessoa" className="mt-3 inline-block text-sm font-medium text-primary underline">
+            Adicionar pessoa
           </Link>
         </div>
       )}
 
-      {!error && loading && people && people.length > 0 && <LoadingState label="Carregando o seu Hoje…" />}
+      {!error && plan && plan.subjects.length > 0 && (
+        <div className="mt-8 space-y-8">
+          <div className="flex flex-wrap items-center gap-2" aria-label="Pessoas incluídas no plano">
+            {plan.subjects.map((person) => (
+              <span key={person.id} className="inline-flex items-center gap-2 rounded-full border border-border bg-surface py-1 pl-1 pr-3 text-sm text-ink">
+                <PersonAvatar person={personSummary(person)} size="sm" />
+                {person.displayName}
+              </span>
+            ))}
+          </div>
 
-      {!error && today && (
-        <div className="mt-8 space-y-6">
-          {today.conflicts.length > 0 && (
-            <div role="alert" className="rounded-lg border border-critical/40 bg-critical/5 p-6">
-              <h2 className="text-sm font-medium text-critical">Precisa da sua decisão</h2>
-              <ul className="mt-3 space-y-2">
-                {today.conflicts.map((c, i) => (
-                  <li key={i} className="text-sm text-ink">
-                    {c.severity === 'BLOCKING' ? '⚠ ' : '· '}
-                    {c.message}
-                  </li>
-                ))}
-              </ul>
+          <section aria-labelledby="attention-heading">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h2 id="attention-heading" className="text-xl font-semibold text-ink">Precisa de você</h2>
+                <p className="mt-1 text-sm text-inkMuted">Decisões e pendências que merecem atenção agora.</p>
+              </div>
+              {needsAttentionCount > 0 && (
+                <span className="rounded-full bg-warning/15 px-3 py-1 text-sm font-medium text-warning">
+                  {needsAttentionCount} {needsAttentionCount === 1 ? 'item' : 'itens'}
+                </span>
+              )}
             </div>
-          )}
 
-          <Card>
-            <h2 className="text-sm font-medium text-inkMuted">Agenda de hoje</h2>
-            {today.events.length === 0 ? (
-              <p className="mt-3 text-sm text-inkMuted">Nada na agenda para hoje.</p>
+            {needsAttentionCount === 0 ? (
+              <Card className="mt-4 border-success/30 bg-success/5">
+                <p className="font-medium text-ink">Tudo em ordem por enquanto</p>
+                <p className="mt-1 text-sm text-inkMuted">Nenhum conflito ou tarefa urgente foi encontrado para hoje.</p>
+              </Card>
             ) : (
-              <ul className="mt-3 divide-y divide-border">
-                {today.events.map((ev) => {
-                  const who = responsibleName(ev.responsible_person_id);
-                  return (
-                    <li key={ev.id} className="flex items-center justify-between gap-3 py-2.5">
-                      <div className="flex items-center gap-3">
-                        <span className="text-xs text-inkMuted">
-                          {new Date(ev.starts_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
-                        </span>
-                        <span className="text-ink">{ev.title}</span>
-                        <StatusBadge domain="calendarCategory" value={ev.category} />
-                      </div>
-                      {who && (
-                        <span className="flex shrink-0 items-center gap-1.5 text-xs text-inkMuted">
-                          <PersonAvatar person={{ id: ev.responsible_person_id!, displayName: who }} size="sm" />
-                          {who}
-                        </span>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
+              <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                {plan.needsAttention.conflicts.map((conflict, index) => (
+                  <Card key={`${conflict.type}-${index}`} className={conflict.severity === 'BLOCKING' ? 'border-critical/30 bg-critical/5' : 'border-warning/30 bg-warning/5'}>
+                    <p className={`text-sm font-semibold ${conflict.severity === 'BLOCKING' ? 'text-critical' : 'text-warning'}`}>
+                      {conflict.severity === 'BLOCKING' ? 'Conflito para resolver' : 'Vale conferir'}
+                    </p>
+                    <p className="mt-2 text-sm text-ink">{conflict.message}</p>
+                    <Link href="/app/calendar" className="mt-3 inline-block text-sm font-medium text-primary underline">
+                      Ver na agenda
+                    </Link>
+                  </Card>
+                ))}
+                {plan.needsAttention.tasks.map((task) => (
+                  <Card key={task.id} className="border-warning/30 bg-warning/5">
+                    <div className="flex items-center gap-2">
+                      <PersonAvatar person={personSummary(task.person)} size="sm" />
+                      <p className="text-sm font-semibold text-ink">{task.person.displayName}</p>
+                    </div>
+                    <p className="mt-3 text-sm text-ink">{task.title}</p>
+                    <div className="mt-3 flex items-center justify-between gap-3">
+                      <StatusBadge domain="task" value={task.status} />
+                      <Link href="/app/tasks" className="text-sm font-medium text-primary underline">Ver tarefa</Link>
+                    </div>
+                  </Card>
+                ))}
+              </div>
             )}
-          </Card>
+          </section>
 
-          <Card>
-            <h2 className="text-sm font-medium text-inkMuted">Pendências</h2>
-            {today.tasks.length === 0 ? (
-              <p className="mt-3 text-sm text-inkMuted">Nenhuma tarefa pendente.</p>
+          <section aria-labelledby="next-heading">
+            <div className="flex items-end justify-between gap-3">
+              <div>
+                <h2 id="next-heading" className="text-xl font-semibold text-ink">Próximas horas</h2>
+                <p className="mt-1 text-sm text-inkMuted">Horários, pessoas e responsáveis do dia.</p>
+              </div>
+              <Link href="/app/calendar" className="text-sm font-medium text-primary underline">Ver agenda completa</Link>
+            </div>
+
+            {plan.today.events.length === 0 ? (
+              <div className="mt-4">
+                <EmptyState title="Nada na agenda para hoje" description="Você pode aproveitar o espaço livre ou adicionar um compromisso." />
+              </div>
             ) : (
-              <ul className="mt-3 divide-y divide-border">
-                {today.tasks.map((t) => {
-                  const who = responsibleName(t.responsible_person_id);
-                  return (
-                    <li key={t.id} className="flex items-center justify-between gap-3 py-2.5">
-                      <span className="text-ink">{t.title}</span>
-                      <div className="flex shrink-0 items-center gap-3">
-                        {who && <span className="text-xs text-inkMuted">com {who}</span>}
-                        <StatusBadge domain="task" value={t.status} />
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
+              <Card className="mt-4 p-0">
+                <ol className="divide-y divide-border">
+                  {[...plan.today.events]
+                    .sort((a, b) => a.starts_at.localeCompare(b.starts_at))
+                    .map((event) => {
+                      const responsible = responsibleLabel(event);
+                      return (
+                        <li key={event.id} className="grid gap-3 p-4 sm:grid-cols-[72px_1fr_auto] sm:items-center">
+                          <time className="text-lg font-semibold text-ink" dateTime={event.starts_at}>{formatTime(event.starts_at)}</time>
+                          <div className="flex min-w-0 items-center gap-3">
+                            <PersonAvatar person={personSummary(event.person)} size="sm" />
+                            <div className="min-w-0">
+                              <p className="truncate font-medium text-ink">{event.title}</p>
+                              <p className="text-sm text-inkMuted">{event.person.displayName}</p>
+                            </div>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+                            <StatusBadge domain="calendarCategory" value={event.category} />
+                            <span className={`text-xs ${responsible ? 'text-success' : 'text-warning'}`}>
+                              {responsible ? `Com ${responsible}` : 'Responsável não definido'}
+                            </span>
+                          </div>
+                        </li>
+                      );
+                    })}
+                </ol>
+              </Card>
             )}
-          </Card>
+          </section>
 
-          {today.routines.length > 0 && (
-            <Card>
-              <h2 className="text-sm font-medium text-inkMuted">Rotinas</h2>
-              {today.routines.map((r) => (
-                <div key={r.id} className="mt-3">
-                  <p className="text-sm font-medium text-ink">{r.title}</p>
-                  <ul className="mt-1 divide-y divide-border">
-                    {r.routine_items.map((item) => (
-                      <li key={item.id} className="flex items-center justify-between py-1.5 text-sm">
-                        <span className={item.completed_at ? 'text-inkMuted line-through' : 'text-ink'}>{item.title}</span>
-                        {item.completed_at && <span className="text-xs text-inkMuted">concluído</span>}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ))}
+          <section aria-labelledby="tomorrow-heading">
+            <div className="flex items-end justify-between gap-3">
+              <div>
+                <h2 id="tomorrow-heading" className="text-xl font-semibold text-ink">Para amanhã</h2>
+                <p className="mt-1 text-sm text-inkMuted">Antecipe o que precisa ser revisado ou preparado.</p>
+              </div>
+              <span className="text-sm text-inkMuted">{new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: 'short' }).format(new Date(`${plan.tomorrowDate}T12:00:00`))}</span>
+            </div>
+
+            {preparationError && <p className="mt-3 text-sm text-critical" role="alert">{preparationError}</p>}
+
+            {plan.tomorrow.preparations.length === 0 && plan.tomorrow.tasks.length === 0 ? (
+              <Card className="mt-4">
+                <p className="font-medium text-ink">Nada para preparar ainda</p>
+                <p className="mt-1 text-sm text-inkMuted">A ZELII usará os compromissos e tarefas cadastrados para montar esta lista.</p>
+              </Card>
+            ) : (
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                {plan.tomorrow.preparations.map((item) => (
+                  <Card key={item.id}>
+                    <div className="flex items-start gap-3">
+                      <PersonAvatar person={personSummary(item.person)} size="sm" />
+                      <div>
+                        <p className="font-medium text-ink">{item.title}</p>
+                        <p className="mt-1 text-sm text-inkMuted">{item.person.displayName} · {formatTime(item.startsAt)}</p>
+                        <p className="mt-2 text-xs text-info">Sugestão baseada no compromisso — revise antes de confirmar.</p>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          className="mt-3"
+                          disabled={createdPreparationIds.has(item.id)}
+                          onClick={() => createPreparationTask(item)}
+                        >
+                          {createdPreparationIds.has(item.id) ? 'Tarefa criada' : 'Criar tarefa'}
+                        </Button>
+                      </div>
+                    </div>
+                  </Card>
+                ))}
+                {plan.tomorrow.tasks.map((task) => (
+                  <Card key={task.id}>
+                    <div className="flex items-center gap-3">
+                      <PersonAvatar person={personSummary(task.person)} size="sm" />
+                      <div className="min-w-0">
+                        <p className="truncate font-medium text-ink">{task.title}</p>
+                        <p className="text-sm text-inkMuted">{task.person.displayName}</p>
+                      </div>
+                    </div>
+                  </Card>
+                ))}
+              </div>
+            )}
+          </section>
+
+          <section aria-labelledby="confirmed-heading">
+            <h2 id="confirmed-heading" className="text-xl font-semibold text-ink">Está combinado</h2>
+            <p className="mt-1 text-sm text-inkMuted">Compromissos que já têm alguém responsável.</p>
+            <Card className="mt-4">
+              {plan.confirmed.length === 0 ? (
+                <p className="text-sm text-inkMuted">Nenhuma responsabilidade foi confirmada nos compromissos de hoje.</p>
+              ) : (
+                <ul className="divide-y divide-border">
+                  {plan.confirmed.map((event) => (
+                    <li key={event.id} className="flex flex-wrap items-center justify-between gap-3 py-3 first:pt-0 last:pb-0">
+                      <div>
+                        <p className="text-sm font-medium text-ink">{event.title}</p>
+                        <p className="text-xs text-inkMuted">{event.person.displayName} · {formatTime(event.starts_at)}</p>
+                      </div>
+                      <span className="rounded-full bg-success/10 px-3 py-1 text-xs font-medium text-success">
+                        {responsibleLabel(event) ?? 'Responsável definido'}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </Card>
-          )}
+          </section>
 
           {activity && activity.length > 0 && (
-            <Card>
-              <h2 className="text-sm font-medium text-inkMuted">Atividade da rede</h2>
-              <ul className="mt-3 space-y-2">
-                {activity.map((item, i) => (
-                  <li key={i} className="text-sm text-ink">
-                    <span className="mr-2 text-xs text-inkMuted">
-                      {new Date(item.occurredAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
-                    </span>
-                    {item.message}
-                  </li>
-                ))}
-              </ul>
-            </Card>
+            <section aria-labelledby="activity-heading">
+              <h2 id="activity-heading" className="text-xl font-semibold text-ink">Atividade da rede</h2>
+              <Card className="mt-4">
+                <ul className="space-y-3">
+                  {activity.map((item, index) => (
+                    <li key={`${item.occurredAt}-${index}`} className="text-sm text-ink">
+                      <span className="mr-2 text-xs text-inkMuted">{formatTime(item.occurredAt)}</span>
+                      {item.message}
+                    </li>
+                  ))}
+                </ul>
+              </Card>
+            </section>
           )}
         </div>
-      )}
-
-      {!error && !loading && people && people.length > 0 && !today && (
-        <p className="mt-8 text-sm text-inkMuted">
-          Selecione uma pessoa acima, ou vá para a{' '}
-          <Link href="/app/capture" className="text-primary underline">
-            Caixa de Entrada
-          </Link>{' '}
-          para revisar o que chegou.
-        </p>
       )}
     </div>
   );

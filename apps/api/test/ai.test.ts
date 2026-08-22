@@ -26,11 +26,12 @@ function makeFakeSupabaseClient(responses: Record<string, { data: unknown; error
   }
   function from(table: string) {
     const builder: Record<string, unknown> = {};
-    for (const method of ['select', 'eq', 'order', 'gte', 'lte', 'limit']) {
+    for (const method of ['select', 'eq', 'order', 'gte', 'lte', 'limit', 'insert', 'update']) {
       builder[method] = () => builder;
     }
     builder['then'] = (onFulfilled: (v: unknown) => unknown) => Promise.resolve(resolveFor(table)).then(onFulfilled);
     builder['maybeSingle'] = async () => resolveFor(table);
+    builder['single'] = async () => resolveFor(table);
     return builder;
   }
   return { client: { from } };
@@ -50,19 +51,21 @@ function makeService(opts: {
   aiEnabled?: boolean;
   auditRecord?: ReturnType<typeof vi.fn>;
   loadPolicyEngineInput?: ReturnType<typeof vi.fn>;
+  authorizeOrThrow?: ReturnType<typeof vi.fn>;
 }) {
   const { client } = makeFakeSupabaseClient(opts.responses);
   const auditRecord = opts.auditRecord ?? vi.fn().mockResolvedValue(undefined);
   const loadPolicyEngineInput = opts.loadPolicyEngineInput ?? vi.fn().mockResolvedValue(ALLOW_ALL_POLICY_INPUT);
+  const authorizeOrThrow = opts.authorizeOrThrow ?? vi.fn().mockResolvedValue(undefined);
 
   process.env.AI_ENABLED = String(opts.aiEnabled ?? true);
 
   const service = new AiService(
     { forUser: () => client } as unknown as SupabaseService,
-    { loadPolicyEngineInput } as unknown as PolicyService,
+    { loadPolicyEngineInput, authorizeOrThrow } as unknown as PolicyService,
     { record: auditRecord } as unknown as AuditService,
   );
-  return { service, auditRecord, loadPolicyEngineInput };
+  return { service, auditRecord, loadPolicyEngineInput, authorizeOrThrow };
 }
 
 afterEach(() => {
@@ -102,6 +105,31 @@ describe('AiService.ask — enabled, no provider key configured (deterministic f
     expect(JSON.stringify(event.context)).not.toContain('amanhã');
   });
 
+  it('adds valid, confirmed memory to the authorized context', async () => {
+    const { service } = makeService({
+      aiEnabled: true,
+      responses: {
+        calendar_events: { data: [], error: null },
+        ai_memory_items: {
+          data: [
+            {
+              id: 'memory-1',
+              summary: 'Pedro precisa levar o inalador nas atividades esportivas.',
+              valid_until: null,
+              last_verified_at: '2026-08-20T10:00:00Z',
+            },
+          ],
+          error: null,
+        },
+      },
+    });
+
+    const answer = await service.ask(ANA, 'O que preciso lembrar para a atividade?', ['pedro']);
+    expect(answer.text).toContain('Memória confirmada');
+    expect(answer.text).toContain('inalador');
+    expect(answer.facts.some((fact) => fact.source.type === 'ai_memory_items')).toBe(true);
+  });
+
   it('returns "não encontrei" when no facts were retrieved for any resolved domain', async () => {
     const { service } = makeService({
       aiEnabled: true,
@@ -109,6 +137,60 @@ describe('AiService.ask — enabled, no provider key configured (deterministic f
     });
     const answer = await service.ask(ANA, 'O que tenho amanhã?', ['pedro']);
     expect(answer.text).toContain('Não encontrei');
+  });
+});
+
+describe('AiService — authorized persistent memory', () => {
+  it('creates memory only after explicit confirmation and audits without the summary', async () => {
+    const auditRecord = vi.fn().mockResolvedValue(undefined);
+    const authorizeOrThrow = vi.fn().mockResolvedValue(undefined);
+    const { service } = makeService({
+      responses: {
+        ai_memory_items: {
+          data: {
+            id: 'memory-1',
+            subject_person_id: 'pedro',
+            domain: 'SCHEDULE',
+            summary: 'Evitar compromissos nas manhãs de sexta-feira.',
+          },
+          error: null,
+        },
+      },
+      auditRecord,
+      authorizeOrThrow,
+    });
+
+    const created = await service.createMemory(ANA, {
+      subjectPersonId: 'pedro',
+      domain: 'SCHEDULE',
+      memoryType: 'CONSTRAINT',
+      summary: 'Evitar compromissos nas manhãs de sexta-feira.',
+      sourceRefs: [{ type: 'user_confirmation' }],
+      confirmed: true,
+    });
+
+    expect(created.id).toBe('memory-1');
+    expect(authorizeOrThrow).toHaveBeenCalledTimes(2);
+    expect(auditRecord).toHaveBeenCalledWith(
+      ANA,
+      expect.objectContaining({ eventType: 'AI_ACTION', context: expect.objectContaining({ action: 'MEMORY_CONFIRMED' }) }),
+    );
+    expect(JSON.stringify(auditRecord.mock.calls[0])).not.toContain('sexta-feira');
+  });
+
+  it('rejects an attempt to persist memory without explicit confirmation', async () => {
+    const { service, authorizeOrThrow } = makeService({ responses: {} });
+    await expect(
+      service.createMemory(ANA, {
+        subjectPersonId: 'pedro',
+        domain: 'SCHEDULE',
+        memoryType: 'CONTEXT',
+        summary: 'Texto que não foi confirmado.',
+        sourceRefs: [],
+        confirmed: false,
+      } as never),
+    ).rejects.toThrow();
+    expect(authorizeOrThrow).not.toHaveBeenCalled();
   });
 });
 

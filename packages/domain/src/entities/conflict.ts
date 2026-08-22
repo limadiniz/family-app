@@ -161,6 +161,30 @@ export function detectConflicts(input: ConflictEngineInput): Conflict[] {
     }
   }
 
+  // UNAVAILABLE_RESPONSIBLE — the same caregiver/driver cannot cover two
+  // different family members in overlapping commitments. This comparison
+  // only becomes possible when the command center composes the whole family.
+  for (const [a, b] of pairs(input.events)) {
+    if (a.subjectPersonId === b.subjectPersonId) continue;
+    if (!overlaps(a.startsAt, eventEnd(a), b.startsAt, eventEnd(b))) continue;
+
+    const peopleOnA = new Set(
+      [a.responsiblePersonId, a.transportationPersonId].filter((id): id is string => Boolean(id)),
+    );
+    const sharedPerson = [b.responsiblePersonId, b.transportationPersonId]
+      .filter((id): id is string => Boolean(id))
+      .find((id) => peopleOnA.has(id));
+    if (!sharedPerson) continue;
+
+    conflicts.push({
+      type: 'UNAVAILABLE_RESPONSIBLE',
+      severity: 'BLOCKING',
+      message: `A mesma pessoa está responsável por “${a.title}” e “${b.title}” em horários sobrepostos.`,
+      involvedPersonIds: [sharedPerson, a.subjectPersonId, b.subjectPersonId],
+      involvedResourceIds: [a.id, b.id],
+    });
+  }
+
   const activeWindows = input.careWindows.filter((w) => w.status === 'SCHEDULED' || w.status === 'ACTIVE');
 
   // INCOMPATIBLE_CARE_WINDOWS — two overlapping windows for the same child, different caregivers.

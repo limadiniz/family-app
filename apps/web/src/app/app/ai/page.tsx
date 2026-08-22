@@ -27,6 +27,34 @@ interface ChatTurn {
   error: string | null;
 }
 
+interface MemoryItem {
+  id: string;
+  domain: string;
+  memory_type: string;
+  summary: string;
+  valid_until: string | null;
+  created_at: string;
+}
+
+const MEMORY_DOMAINS = [
+  ['SCHEDULE', 'Agenda'],
+  ['SCHOOL', 'Escola'],
+  ['HEALTH', 'Saúde'],
+  ['MEDICATION', 'Medicamentos'],
+  ['ACTIVITIES', 'Atividades'],
+  ['TRANSPORTATION', 'Transporte'],
+  ['DOCUMENTS', 'Documentos'],
+  ['NOTES', 'Observações'],
+] as const;
+
+const MEMORY_TYPES = [
+  ['PREFERENCE', 'Preferência'],
+  ['ROUTINE', 'Rotina'],
+  ['CONSTRAINT', 'Restrição'],
+  ['DECISION', 'Decisão da família'],
+  ['CONTEXT', 'Contexto importante'],
+] as const;
+
 /**
  * Family Copilot (V3 §57-63). Talks ONLY to POST /api/v1/ai/ask —
  * apps/web never holds an LLM key and never queries the Family Care
@@ -40,6 +68,15 @@ export default function AiPage() {
   const [question, setQuestion] = useState('');
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [loading, setLoading] = useState(false);
+  const [memories, setMemories] = useState<MemoryItem[] | null>(null);
+  const [memoryReloadKey, setMemoryReloadKey] = useState(0);
+  const [memorySummary, setMemorySummary] = useState('');
+  const [memoryDomain, setMemoryDomain] = useState('SCHEDULE');
+  const [memoryType, setMemoryType] = useState('CONTEXT');
+  const [memoryValidUntil, setMemoryValidUntil] = useState('');
+  const [memoryConfirmed, setMemoryConfirmed] = useState(false);
+  const [memorySaving, setMemorySaving] = useState(false);
+  const [memoryError, setMemoryError] = useState<string | null>(null);
 
   useEffect(() => {
     apiFetch<Person[]>('/persons')
@@ -49,6 +86,21 @@ export default function AiPage() {
       })
       .catch(() => setPeople([]));
   }, []);
+
+  useEffect(() => {
+    if (!selectedPersonId) {
+      setMemories([]);
+      return;
+    }
+    setMemories(null);
+    setMemoryError(null);
+    apiFetch<MemoryItem[]>(`/ai/memory?subjectPersonId=${encodeURIComponent(selectedPersonId)}`)
+      .then(setMemories)
+      .catch((err) => {
+        setMemories([]);
+        setMemoryError(err instanceof Error ? err.message : 'Não foi possível carregar as memórias.');
+      });
+  }, [selectedPersonId, memoryReloadKey]);
 
   async function handleAsk(e: React.FormEvent) {
     e.preventDefault();
@@ -72,6 +124,46 @@ export default function AiPage() {
     }
   }
 
+  async function handleCreateMemory(e: React.FormEvent) {
+    e.preventDefault();
+    if (!selectedPersonId || !memorySummary.trim() || !memoryConfirmed) return;
+    setMemorySaving(true);
+    setMemoryError(null);
+    try {
+      await apiFetch('/ai/memory', {
+        method: 'POST',
+        body: JSON.stringify({
+          subjectPersonId: selectedPersonId,
+          domain: memoryDomain,
+          memoryType,
+          summary: memorySummary.trim(),
+          sourceRefs: [{ type: 'user_confirmation' }],
+          validUntil: memoryValidUntil ? new Date(`${memoryValidUntil}T23:59:59`).toISOString() : null,
+          confirmed: true,
+        }),
+      });
+      setMemorySummary('');
+      setMemoryValidUntil('');
+      setMemoryConfirmed(false);
+      setMemoryReloadKey((key) => key + 1);
+    } catch (err) {
+      setMemoryError(err instanceof Error ? err.message : 'Não foi possível salvar a memória.');
+    } finally {
+      setMemorySaving(false);
+    }
+  }
+
+  async function handleRevokeMemory(memory: MemoryItem) {
+    if (!window.confirm(`Esquecer esta informação?\n\n${memory.summary}`)) return;
+    setMemoryError(null);
+    try {
+      await apiFetch(`/ai/memory/${memory.id}/revoke`, { method: 'PATCH' });
+      setMemoryReloadKey((key) => key + 1);
+    } catch (err) {
+      setMemoryError(err instanceof Error ? err.message : 'Não foi possível esquecer esta memória.');
+    }
+  }
+
   return (
     <div className="max-w-2xl">
       <PageHeader
@@ -89,6 +181,84 @@ export default function AiPage() {
           ) : undefined
         }
       />
+
+      <details className="mt-8 rounded-xl border border-border bg-surface p-4 open:shadow-sm">
+        <summary className="cursor-pointer font-semibold text-ink">
+          O que a ZELII pode lembrar
+          <span className="ml-2 text-sm font-normal text-inkMuted">
+            {memories === null ? 'carregando…' : `${memories.length} ${memories.length === 1 ? 'memória ativa' : 'memórias ativas'}`}
+          </span>
+        </summary>
+        <p className="mt-3 text-sm leading-relaxed text-inkMuted">
+          A memória é usada nas próximas respostas somente quando você tem permissão para acessar a pessoa e o assunto.
+          A conversa não é salva automaticamente: confirme abaixo apenas o que deve permanecer.
+        </p>
+
+        {memoryError && <p className="mt-3 text-sm text-critical" role="alert">{memoryError}</p>}
+
+        {memories && memories.length > 0 && (
+          <ul className="mt-4 divide-y divide-border rounded-lg border border-border">
+            {memories.map((memory) => (
+              <li key={memory.id} className="flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-sm text-ink">{memory.summary}</p>
+                  <p className="mt-1 text-xs text-inkMuted">
+                    {MEMORY_DOMAINS.find(([value]) => value === memory.domain)?.[1] ?? memory.domain}
+                    {memory.valid_until ? ` · válida até ${new Date(memory.valid_until).toLocaleDateString('pt-BR')}` : ' · sem prazo definido'}
+                  </p>
+                </div>
+                <Button type="button" size="sm" variant="ghost" onClick={() => handleRevokeMemory(memory)}>
+                  Esquecer
+                </Button>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <form onSubmit={handleCreateMemory} className="mt-5 space-y-4 border-t border-border pt-5">
+          <div>
+            <label htmlFor="memory-summary" className="text-sm font-medium text-ink">Informação a lembrar</label>
+            <Input
+              id="memory-summary"
+              value={memorySummary}
+              onChange={(event) => setMemorySummary(event.target.value)}
+              maxLength={500}
+              placeholder="Ex.: Às sextas, evitar compromissos antes das 9h."
+              className="mt-1 w-full"
+            />
+          </div>
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div>
+              <label htmlFor="memory-domain" className="text-sm font-medium text-ink">Assunto</label>
+              <Select id="memory-domain" value={memoryDomain} onChange={(event) => setMemoryDomain(event.target.value)} className="mt-1 w-full">
+                {MEMORY_DOMAINS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </Select>
+            </div>
+            <div>
+              <label htmlFor="memory-type" className="text-sm font-medium text-ink">Tipo</label>
+              <Select id="memory-type" value={memoryType} onChange={(event) => setMemoryType(event.target.value)} className="mt-1 w-full">
+                {MEMORY_TYPES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </Select>
+            </div>
+            <div>
+              <label htmlFor="memory-validity" className="text-sm font-medium text-ink">Válida até (opcional)</label>
+              <Input id="memory-validity" type="date" value={memoryValidUntil} onChange={(event) => setMemoryValidUntil(event.target.value)} className="mt-1 w-full" />
+            </div>
+          </div>
+          <label className="flex items-start gap-3 text-sm text-ink">
+            <input
+              type="checkbox"
+              checked={memoryConfirmed}
+              onChange={(event) => setMemoryConfirmed(event.target.checked)}
+              className="mt-1 h-4 w-4 accent-primary"
+            />
+            <span>Confirmo que esta informação está correta e autorizo a ZELII a usá-la para auxiliar futuras decisões.</span>
+          </label>
+          <Button type="submit" size="sm" disabled={memorySaving || !memorySummary.trim() || !memoryConfirmed || !selectedPersonId}>
+            {memorySaving ? 'Salvando…' : 'Guardar na memória'}
+          </Button>
+        </form>
+      </details>
 
       <div className="mt-8 space-y-6">
         {turns.length === 0 && (

@@ -67,4 +67,10 @@ export class CommandCenterController {
     const day = date ?? new Date().toISOString().slice(0, 10);
     return this.service.getToday(actor, subjectPersonId, day);
   }
+
+  @Get('family-plan')
+  getFamilyPlan(@CurrentActor() actor: RequestActor, @Query('date') date?: string) {
+    const day = date ?? new Date().toISOString().slice(0, 10);
+    return this.service.getFamilyPlan(actor, day);
+  }
 }
