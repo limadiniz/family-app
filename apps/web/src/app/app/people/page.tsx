@@ -7,6 +7,8 @@ import { PageHeader, Card, PersonAvatar, StatusBadge, LoadingState, ErrorState, 
 interface Person {
   id: string;
   display_name: string;
+  legal_name?: string | null;
+  birth_date?: string | null;
   is_minor: boolean;
   person_type: string;
   roles: string[];
@@ -67,6 +69,12 @@ export default function PeoplePage() {
   const [addError, setAddError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [editingPerson, setEditingPerson] = useState<Person | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editLegalName, setEditLegalName] = useState('');
+  const [editBirthDate, setEditBirthDate] = useState('');
+  const [editError, setEditError] = useState<string | null>(null);
+  const [editBusy, setEditBusy] = useState(false);
 
   function load() {
     setError(null);
@@ -124,6 +132,38 @@ export default function PeoplePage() {
     }
   }
 
+  function openEditPerson(person: Person) {
+    setEditingPerson(person);
+    setEditName(person.display_name);
+    setEditLegalName(person.legal_name ?? '');
+    setEditBirthDate(person.birth_date ?? '');
+    setEditError(null);
+    setActionError(null);
+  }
+
+  async function handleEditPerson(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editingPerson || !editName.trim()) return;
+    setEditError(null);
+    setEditBusy(true);
+    try {
+      await apiFetch(`/persons/${editingPerson.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          display_name: editName.trim(),
+          legal_name: editLegalName.trim() || null,
+          birth_date: editBirthDate || null,
+        }),
+      });
+      setEditingPerson(null);
+      load();
+    } catch (err) {
+      setEditError(err instanceof ApiError ? err.message : 'Não foi possível salvar as alterações.');
+    } finally {
+      setEditBusy(false);
+    }
+  }
+
   return (
     <div className="max-w-3xl">
       <PageHeader
@@ -162,6 +202,42 @@ export default function PeoplePage() {
               Adicionar
             </Button>
             {addError && <p className="text-sm text-critical">{addError}</p>}
+          </form>
+        </Card>
+      )}
+
+      {editingPerson && (
+        <Card className="mt-4">
+          <form onSubmit={handleEditPerson} className="flex flex-col gap-3" aria-label={`Editar ${editingPerson.display_name}`}>
+            <p className="font-medium text-ink">Editar pessoa</p>
+            <Input
+              label="Nome exibido"
+              required
+              value={editName}
+              onChange={(e) => setEditName(e.target.value)}
+              placeholder="Nome"
+            />
+            <Input
+              label="Nome legal (opcional)"
+              value={editLegalName}
+              onChange={(e) => setEditLegalName(e.target.value)}
+              placeholder="Nome completo em documentos"
+            />
+            <Input
+              type="date"
+              label="Data de nascimento (opcional)"
+              value={editBirthDate}
+              onChange={(e) => setEditBirthDate(e.target.value)}
+            />
+            {editError && <p className="text-sm text-critical">{editError}</p>}
+            <div className="flex flex-wrap gap-2">
+              <Button type="submit" disabled={editBusy || !editName.trim()}>
+                {editBusy ? 'Salvando…' : 'Salvar alterações'}
+              </Button>
+              <Button type="button" variant="ghost" onClick={() => setEditingPerson(null)} disabled={editBusy}>
+                Cancelar
+              </Button>
+            </div>
           </form>
         </Card>
       )}
@@ -217,7 +293,10 @@ export default function PeoplePage() {
                       <p className="mt-1 text-xs text-inkMuted">Sem vínculo ativo em nenhuma família</p>
                     )}
                   </div>
-                  <Button type="button" size="sm" variant="destructive" onClick={() => void handleDeletePerson(p)}>Excluir</Button>
+                  <div className="flex shrink-0 gap-2">
+                    <Button type="button" size="sm" variant="secondary" onClick={() => openEditPerson(p)}>Editar</Button>
+                    <Button type="button" size="sm" variant="destructive" onClick={() => void handleDeletePerson(p)}>Excluir</Button>
+                  </div>
                 </Card>
               </li>
             ))}
