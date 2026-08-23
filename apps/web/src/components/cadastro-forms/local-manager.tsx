@@ -32,6 +32,17 @@ export function LocalManager({ onCancel }: { onCancel: () => void }) {
     setShowForm(true);
   }
 
+  async function deletePlace(place: ResidenceRecord) {
+    if (!place.id || !window.confirm(`Excluir “${place.label}” dos locais da família?`)) return;
+    setError(null);
+    try {
+      await apiFetch(`/residences/${place.id}`, { method: 'DELETE' });
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Não foi possível excluir o local.');
+    }
+  }
+
   if (showForm) {
     return (
       <div className="flex flex-col gap-3">
@@ -71,7 +82,10 @@ export function LocalManager({ onCancel }: { onCancel: () => void }) {
                 <p className="mt-1 text-xs font-medium uppercase tracking-wide text-primary">{PLACE_TYPE_LABELS[place.place_type] ?? 'Outro'}</p>
                 <p className="mt-1 text-sm text-inkMuted">{[place.address_line, place.city, place.state].filter(Boolean).join(' · ') || 'Endereço ainda não informado'}</p>
               </div>
-              <Button type="button" size="sm" variant="secondary" onClick={() => openEdit(place)}>Editar</Button>
+              <div className="flex shrink-0 gap-2">
+                <Button type="button" size="sm" variant="secondary" onClick={() => openEdit(place)}>Editar</Button>
+                <Button type="button" size="sm" variant="destructive" onClick={() => void deletePlace(place)}>Excluir</Button>
+              </div>
             </Card>
           ))}
         </div>

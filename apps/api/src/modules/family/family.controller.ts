@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { AuthGuard } from '../../common/auth.guard';
 import { CurrentActor } from '../../common/current-actor.decorator';
@@ -74,6 +74,11 @@ export class FamilyController {
   @Patch('residences/:id')
   updateResidence(@CurrentActor() actor: RequestActor, @Param('id') id: string, @Body() body: Parameters<FamilyService['updateResidence']>[2]) {
     return this.familyService.updateResidence(actor, id, body);
+  }
+
+  @Delete('residences/:id')
+  deleteResidence(@CurrentActor() actor: RequestActor, @Param('id') id: string) {
+    return this.familyService.deleteResidence(actor, id);
   }
 
   @Post('places/autocomplete')

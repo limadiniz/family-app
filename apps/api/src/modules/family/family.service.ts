@@ -304,6 +304,19 @@ export class FamilyService {
     return data;
   }
 
+  async deleteResidence(actor: RequestActor, residenceId: string) {
+    const { data, error } = await this.db(actor)
+      .from('residences')
+      .update({ deleted_at: new Date().toISOString() })
+      .eq('id', residenceId)
+      .is('deleted_at', null)
+      .select('id')
+      .maybeSingle();
+    if (error) throw new BadRequestException(error.message);
+    if (!data) throw new NotFoundException('Local não encontrado ou já excluído.');
+    return { id: data.id, deleted: true };
+  }
+
   // ------------------------------------------------------------ Google Places
 
   private googleMapsApiKey() {
