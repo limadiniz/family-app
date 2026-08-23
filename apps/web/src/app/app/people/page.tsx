@@ -65,6 +65,7 @@ export default function PeoplePage() {
   const [birthDate, setBirthDate] = useState('');
   const [familyUnitId, setFamilyUnitId] = useState('');
   const [addError, setAddError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   function load() {
@@ -109,6 +110,17 @@ export default function PeoplePage() {
       setAddError(err instanceof ApiError ? err.message : 'Erro ao adicionar dependente.');
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function handleDeletePerson(person: Person) {
+    if (!window.confirm(`Excluir “${person.display_name}” da família?`)) return;
+    setActionError(null);
+    try {
+      await apiFetch(`/persons/${person.id}`, { method: 'DELETE' });
+      load();
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : 'Não foi possível excluir essa pessoa.');
     }
   }
 
@@ -172,6 +184,7 @@ export default function PeoplePage() {
 
       <div className="mt-4">
         {error && <ErrorState description={error} onRetry={load} />}
+        {actionError && <ErrorState description={actionError} />}
 
         {!error && !filtered && <LoadingState label="Carregando pessoas…" />}
 
@@ -204,6 +217,7 @@ export default function PeoplePage() {
                       <p className="mt-1 text-xs text-inkMuted">Sem vínculo ativo em nenhuma família</p>
                     )}
                   </div>
+                  <Button type="button" size="sm" variant="destructive" onClick={() => void handleDeletePerson(p)}>Excluir</Button>
                 </Card>
               </li>
             ))}

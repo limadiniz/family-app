@@ -26,7 +26,7 @@ export class FamilyService {
     await this.policy.authorizeOrThrow(actor, 'VIEW', 'PROFILE', personId, { purpose: 'get_person' });
     const { data, error } = await this.db(actor).from('persons').select('*').eq('id', personId).maybeSingle();
     if (error) throw new BadRequestException(error.message);
-    if (!data) throw new NotFoundException('Pessoa não encontrada.');
+    if (!data || data.deleted_at) throw new NotFoundException('Pessoa não encontrada.');
     return data;
   }
 
@@ -47,7 +47,7 @@ export class FamilyService {
     const { data, error } = await this.db(actor).from('persons').select('*').order('display_name');
     if (error) throw new BadRequestException(error.message);
     const results: Array<Record<string, unknown>> = [];
-    for (const person of data ?? []) {
+    for (const person of (data ?? []).filter((item) => !item.deleted_at)) {
       const decision = await this.policy
         .authorizeOrThrow(actor, 'VIEW', 'PROFILE', person.id as string)
         .then(() => true)
@@ -77,7 +77,31 @@ export class FamilyService {
     await this.policy.authorizeOrThrow(actor, 'EDIT', 'PROFILE', personId, { purpose: 'update_person' });
     const { data, error } = await this.db(actor).from('persons').update(patch).eq('id', personId).select().maybeSingle();
     if (error) throw new BadRequestException(error.message);
+    if (!data || data.deleted_at) throw new NotFoundException('Pessoa não encontrada.');
     return data;
+  }
+
+  async deletePerson(actor: RequestActor, personId: string) {
+    await this.policy.authorizeOrThrow(actor, 'EDIT', 'PROFILE', personId, { purpose: 'delete_person' });
+    const { data: memberships, error: membershipsError } = await this.db(actor)
+      .from('family_memberships')
+      .select('role')
+      .eq('person_id', personId)
+      .eq('is_active', true);
+    if (membershipsError) throw new BadRequestException(membershipsError.message);
+    if ((memberships ?? []).some((membership) => membership.role === 'FAMILY_OWNER')) {
+      throw new BadRequestException('O responsável principal não pode ser excluído. Transfira a titularidade da família antes.');
+    }
+    const { data, error } = await this.db(actor)
+      .from('persons')
+      .update({ deleted_at: new Date().toISOString() })
+      .eq('id', personId)
+      .is('deleted_at', null)
+      .select('id')
+      .maybeSingle();
+    if (error) throw new BadRequestException(error.message);
+    if (!data) throw new NotFoundException('Pessoa não encontrada ou já excluída.');
+    return { id: data.id, deleted: true };
   }
 
   // ------------------------------------------------------------ family unit

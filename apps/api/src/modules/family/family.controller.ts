@@ -27,6 +27,11 @@ export class FamilyController {
     return this.familyService.updatePerson(actor, id, body);
   }
 
+  @Delete('persons/:id')
+  deletePerson(@CurrentActor() actor: RequestActor, @Param('id') id: string) {
+    return this.familyService.deletePerson(actor, id);
+  }
+
   @Post('family-units')
   createFamilyUnit(@CurrentActor() actor: RequestActor, @Body() body: { name: string; kind?: string }) {
     return this.familyService.createFamilyUnit(actor, body);
