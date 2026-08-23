@@ -25,6 +25,7 @@ name: Deploy — Production
 #                                      this password periodically, same as the
 #                                      docs/checklists/infra-checklist.md pendency)
 #   FLY_API_TOKEN_PRODUCTION        — `fly tokens create deploy -a family-app-api-production`
+#   GOOGLE_MAPS_API_KEY_PRODUCTION  — Google Cloud API key restricted to Routes API
 
 on:
   push:
@@ -122,6 +123,19 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Configure Google Routes API key
+        run: |
+          if [ -z "$GOOGLE_MAPS_API_KEY" ]; then
+            echo "::warning::GOOGLE_MAPS_API_KEY_PRODUCTION não foi configurada; o cálculo usará apenas o link do Google Maps."
+          else
+            flyctl secrets set \
+              GOOGLE_MAPS_API_KEY="$GOOGLE_MAPS_API_KEY" \
+              --app family-app-api-production
+          fi
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_PRODUCTION }}
+          GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY_PRODUCTION }}
 
       - name: fly deploy
         run: flyctl deploy --config fly.production.toml --remote-only

@@ -10,6 +10,12 @@ interface Person {
   display_name: string;
 }
 
+interface Residence {
+  id: string;
+  label: string;
+  place_type: string;
+}
+
 const CATEGORIES = ['SCHOOL', 'HEALTH', 'SPORT', 'FAMILY', 'MEDICATION', 'DOCUMENT', 'FINANCE', 'OTHER'];
 
 /**
@@ -20,11 +26,13 @@ const CATEGORIES = ['SCHOOL', 'HEALTH', 'SPORT', 'FAMILY', 'MEDICATION', 'DOCUME
  */
 export function CompromissoForm({ onSuccess, onCancel }: { onSuccess: () => void; onCancel: () => void }) {
   const [people, setPeople] = useState<Person[] | null>(null);
+  const [residences, setResidences] = useState<Residence[]>([]);
   const [subjectPersonId, setSubjectPersonId] = useState<string | null>(null);
   const [title, setTitle] = useState('');
   const [category, setCategory] = useState('OTHER');
   const [startsAt, setStartsAt] = useState('');
   const [endsAt, setEndsAt] = useState('');
+  const [residenceId, setResidenceId] = useState('');
   const [responsiblePersonId, setResponsiblePersonId] = useState('');
   const [notes, setNotes] = useState('');
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -33,10 +41,11 @@ export function CompromissoForm({ onSuccess, onCancel }: { onSuccess: () => void
 
   function load() {
     setLoadError(null);
-    apiFetch<Person[]>('/persons')
-      .then((list) => {
+    Promise.all([apiFetch<Person[]>('/persons'), apiFetch<Residence[]>('/residences')])
+      .then(([list, places]) => {
         setPeople(list);
         if (list.length > 0) setSubjectPersonId(list[0].id);
+        setResidences(places);
       })
       .catch((err) => setLoadError(err instanceof ApiError ? err.message : 'Erro ao carregar pessoas.'));
   }
@@ -57,6 +66,7 @@ export function CompromissoForm({ onSuccess, onCancel }: { onSuccess: () => void
           category,
           startsAt: new Date(startsAt).toISOString(),
           endsAt: endsAt ? new Date(endsAt).toISOString() : undefined,
+          residenceId: residenceId || undefined,
           responsiblePersonId: responsiblePersonId || undefined,
           notes: notes || undefined,
         }),
@@ -119,6 +129,19 @@ export function CompromissoForm({ onSuccess, onCancel }: { onSuccess: () => void
             </option>
           ))}
         </Select>
+        <Select label="Local (opcional)" value={residenceId} onChange={(e) => setResidenceId(e.target.value)}>
+          <option value="">Ainda não definido</option>
+          {residences.map((place) => (
+            <option key={place.id} value={place.id}>
+              {place.label}
+            </option>
+          ))}
+        </Select>
+        {residences.length === 0 && (
+          <p className="-mt-2 text-xs text-inkMuted">
+            Cadastre um local em <strong>Cadastros → Local</strong> para vinculá-lo a este compromisso.
+          </p>
+        )}
         {people.length > 1 && (
           <Select label="Responsável (opcional)" value={responsiblePersonId} onChange={(e) => setResponsiblePersonId(e.target.value)}>
             <option value="">Ninguém definido</option>

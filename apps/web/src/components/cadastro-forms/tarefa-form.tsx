@@ -9,13 +9,20 @@ interface Person {
   display_name: string;
 }
 
+interface Residence {
+  id: string;
+  label: string;
+}
+
 /** POST /tasks — mesmo endpoint de /app/tasks, aqui com os campos opcionais que a lista rápida daquela página não expunha. */
 export function TarefaForm({ onSuccess, onCancel }: { onSuccess: () => void; onCancel: () => void }) {
   const [people, setPeople] = useState<Person[] | null>(null);
+  const [residences, setResidences] = useState<Residence[]>([]);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [dueAt, setDueAt] = useState('');
   const [priority, setPriority] = useState('MEDIUM');
+  const [residenceId, setResidenceId] = useState('');
   const [subjectPersonId, setSubjectPersonId] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -23,8 +30,11 @@ export function TarefaForm({ onSuccess, onCancel }: { onSuccess: () => void; onC
 
   function load() {
     setLoadError(null);
-    apiFetch<Person[]>('/persons')
-      .then(setPeople)
+    Promise.all([apiFetch<Person[]>('/persons'), apiFetch<Residence[]>('/residences')])
+      .then(([familyPeople, places]) => {
+        setPeople(familyPeople);
+        setResidences(places);
+      })
       .catch((err) => setLoadError(err instanceof ApiError ? err.message : 'Erro ao carregar pessoas.'));
   }
 
@@ -44,6 +54,7 @@ export function TarefaForm({ onSuccess, onCancel }: { onSuccess: () => void; onC
           dueAt: dueAt ? new Date(dueAt).toISOString() : undefined,
           priority,
           subjectPersonId: subjectPersonId || undefined,
+          residenceId: residenceId || undefined,
         }),
       });
       onSuccess();
@@ -88,6 +99,19 @@ export function TarefaForm({ onSuccess, onCancel }: { onSuccess: () => void; onC
             value={subjectPersonId}
             onChange={(id) => setSubjectPersonId(id === subjectPersonId ? null : id)}
           />
+        )}
+        <Select label="Local (opcional)" value={residenceId} onChange={(e) => setResidenceId(e.target.value)}>
+          <option value="">Ainda não definido</option>
+          {residences.map((place) => (
+            <option key={place.id} value={place.id}>
+              {place.label}
+            </option>
+          ))}
+        </Select>
+        {residences.length === 0 && (
+          <p className="-mt-2 text-xs text-inkMuted">
+            Cadastre um local em <strong>Cadastros → Local</strong> para vinculá-lo à tarefa.
+          </p>
         )}
         {error && <ErrorState description={error} />}
         <FormActions submitLabel="Criar tarefa" onCancel={onCancel} busy={busy} disabled={!title.trim()} />

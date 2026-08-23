@@ -8,7 +8,12 @@ interface Person { id: string; display_name: string; }
 interface Residence { id: string; label: string; place_type: string; address_line: string | null; city: string | null; state: string | null; }
 
 const DAYS = [['1', 'Seg'], ['2', 'Ter'], ['3', 'Qua'], ['4', 'Qui'], ['5', 'Sex'], ['6', 'Sáb'], ['0', 'Dom']] as const;
-const TYPES = [['SCHOOL', 'Escola'], ['ACADEMY', 'Academia'], ['SPORT', 'Esporte'], ['THERAPY', 'Terapia'], ['MEDICATION', 'Medicamento'], ['OTHER', 'Outro']] as const;
+const TYPES = [
+  ['SCHOOL', 'Escola'], ['DAYCARE', 'Creche / berçário'], ['ACADEMY', 'Academia'],
+  ['SPORT', 'Esporte'], ['THERAPY', 'Terapia'], ['DENTIST', 'Dentista'],
+  ['HEALTHCARE', 'Consulta / saúde'], ['SALON', 'Salão / barbearia'],
+  ['COURSE', 'Curso'], ['MEDICATION', 'Medicamento'], ['OTHER', 'Outro'],
+] as const;
 
 export function RotinaForm({ onSuccess, onCancel }: { onSuccess: () => void; onCancel: () => void }) {
   const [people, setPeople] = useState<Person[] | null>(null);

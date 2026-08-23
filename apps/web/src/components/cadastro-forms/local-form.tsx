@@ -7,10 +7,19 @@ import { Card, Input, Select, LoadingState, ErrorState, FormActions } from '@/co
 const PLACE_TYPES = [
   ['HOME', 'Casa'],
   ['SCHOOL', 'Escola'],
+  ['DAYCARE', 'Creche / berçário'],
   ['HEALTHCARE', 'Hospital / clínica'],
+  ['DENTIST', 'Dentista'],
+  ['PHARMACY', 'Farmácia'],
   ['ACADEMY', 'Academia'],
   ['SPORT', 'Esporte'],
   ['THERAPY', 'Terapia'],
+  ['SALON', 'Salão / barbearia'],
+  ['WORK', 'Trabalho'],
+  ['COURSE', 'Curso'],
+  ['RELATIVE', 'Casa de familiar'],
+  ['RELIGIOUS', 'Igreja / comunidade'],
+  ['MARKET', 'Mercado / serviço'],
   ['OTHER', 'Outro'],
 ] as const;
 
@@ -48,7 +57,7 @@ export function LocalForm({ onSuccess, onCancel }: { onSuccess: () => void; onCa
     <Card>
       <form onSubmit={handleSubmit} className="flex flex-col gap-4">
         <p className="text-sm leading-relaxed text-inkMuted">
-          Cadastre casa, escola, hospital ou outro ponto de cuidado. O endereço fica restrito à família e só é enviado ao Google Maps quando você pedir uma rota.
+          Cadastre casa, escola, hospital, academia, salão ou qualquer outro lugar importante para a família. Escolha “Outro” e use um nome personalizado quando não encontrar a categoria. O endereço fica restrito à família e só é enviado ao Google Maps quando você pedir uma rota.
         </p>
         <Input label="Nome do local" required value={label} onChange={(event) => setLabel(event.target.value)} placeholder="Ex.: Escola Miguel" />
         <Select label="Tipo de local" value={placeType} onChange={(event) => setPlaceType(event.target.value)}>

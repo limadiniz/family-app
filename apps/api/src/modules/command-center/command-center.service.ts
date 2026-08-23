@@ -92,6 +92,7 @@ export class CommandCenterService {
       description?: string;
       dueAt?: string;
       priority?: string;
+      residenceId?: string;
     },
   ) {
     const scopePersonId = input.subjectPersonId ?? input.responsiblePersonId ?? actor.personId!;
@@ -106,6 +107,7 @@ export class CommandCenterService {
         description: input.description ?? null,
         due_at: input.dueAt ?? null,
         priority: input.priority ?? 'MEDIUM',
+        residence_id: input.residenceId ?? null,
       })
       .select()
       .single();
