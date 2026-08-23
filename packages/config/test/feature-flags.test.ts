@@ -6,6 +6,14 @@ describe('loadFeatureFlags', () => {
     const flags = loadFeatureFlags({});
     expect(flags).toEqual({
       AI_ENABLED: false,
+      AI_VECTOR_SEARCH_ENABLED: false,
+      AI_VECTOR_SHADOW_ENABLED: false,
+      AI_EXACT_CACHE_ENABLED: false,
+      AI_SEMANTIC_CACHE_ENABLED: false,
+      AI_MCP_READ_ENABLED: false,
+      AI_MCP_PROPOSALS_ENABLED: false,
+      AI_AGENT_LOOP_ENABLED: false,
+      AI_FINE_TUNED_MODEL_ENABLED: false,
       OCR_ENABLED: false,
       FINANCE_ENABLED: true,
       TEEN_ACCESS_ENABLED: true,
@@ -13,8 +21,15 @@ describe('loadFeatureFlags', () => {
   });
 
   it('reads FF_* environment overrides', () => {
-    const flags = loadFeatureFlags({ FF_AI_ENABLED: 'true', FF_FINANCE_ENABLED: 'false' });
+    const flags = loadFeatureFlags({
+      FF_AI_ENABLED: 'true',
+      FF_AI_VECTOR_SHADOW: 'true',
+      FF_AI_MCP_READ: '1',
+      FF_FINANCE_ENABLED: 'false',
+    });
     expect(flags.AI_ENABLED).toBe(true);
+    expect(flags.AI_VECTOR_SHADOW_ENABLED).toBe(true);
+    expect(flags.AI_MCP_READ_ENABLED).toBe(true);
     expect(flags.FINANCE_ENABLED).toBe(false);
   });
 

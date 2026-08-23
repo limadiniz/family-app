@@ -18,6 +18,7 @@ name: Deploy — Production
 # Required repo secrets — see DEPLOYMENT.md "Secrets by host" for exactly
 # where each one is generated:
 #   SUPABASE_ACCESS_TOKEN           — personal/org access token (shared with staging)
+#   SUPABASE_STAGING_PROJECT_REF    — staging ref, used only to prove that production is isolated
 #   SUPABASE_PRODUCTION_PROJECT_REF — production project's ref
 #   SUPABASE_PRODUCTION_DB_URL      — production pooler connection string (used ONLY for
 #                                      the pre-deploy pg_dump backup step below; rotate
@@ -35,8 +36,29 @@ concurrency:
   cancel-in-progress: false # never cancel mid-migration or mid-backup
 
 jobs:
+  isolation-check:
+    name: Refuse a shared staging/production database
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Assert distinct Supabase projects
+        env:
+          STAGING_PROJECT_REF: ${{ secrets.SUPABASE_STAGING_PROJECT_REF }}
+          PRODUCTION_PROJECT_REF: ${{ secrets.SUPABASE_PRODUCTION_PROJECT_REF }}
+        run: |
+          if [ -z "$STAGING_PROJECT_REF" ] || [ -z "$PRODUCTION_PROJECT_REF" ]; then
+            echo "::error::Both Supabase project refs are required to verify environment isolation."
+            exit 1
+          fi
+          if [ "$STAGING_PROJECT_REF" = "$PRODUCTION_PROJECT_REF" ]; then
+            echo "::error::Staging and production resolve to the same Supabase project. Deployment refused."
+            exit 1
+          fi
+          echo "Supabase staging/production isolation verified."
+
   backup:
     name: Pre-deploy backup (production database)
+    needs: isolation-check
     runs-on: ubuntu-latest
     environment: production
     steps:

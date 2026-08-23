@@ -3,3 +3,8 @@ export * from './intent';
 export * from './decision-context';
 export * from './ai-gateway';
 export * from './tool-registry';
+export * from './safety-evals';
+export * from './vector-pipeline';
+export * from './response-cache';
+export * from './mcp-registry';
+export * from './supervised-agent';

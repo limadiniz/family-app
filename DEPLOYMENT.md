@@ -1,16 +1,21 @@
 # DEPLOYMENT.md
 
+> **Pendência pré-comercialização (22/08/2026):** staging e produção ainda usam o mesmo Supabase. Uma publicação
+> técnica controlada em produção pode ocorrer, mas a aplicação não deve ser comercializada até existir um
+> ambiente de homologação isolado e validado. O checklist vinculante está em
+> `docs/checklists/infra-checklist.md`.
+
 ## Environments
 
 Three fully separate environments (§77): `development`, `staging`, `production`. Each needs its own Supabase
 project (own database, auth, storage), its own set of secrets, and its own URLs. None of this is provisioned
 yet — see `docs/checklists/infra-checklist.md` for the human steps required.
 
-| Environment | Web | API | Database |
-|---|---|---|---|
-| development | `localhost:3000` | `localhost:4000` | local Postgres or a dev Supabase project |
-| staging | `staging.app.<domain>` (TBD) | `staging.api.<domain>` (TBD) | dedicated Supabase project |
-| production | `app.<domain>` (TBD) | `api.<domain>` (TBD) | dedicated Supabase project |
+| Environment | Web                          | API                          | Database                                 |
+| ----------- | ---------------------------- | ---------------------------- | ---------------------------------------- |
+| development | `localhost:3000`             | `localhost:4000`             | local Postgres or a dev Supabase project |
+| staging     | `staging.app.<domain>` (TBD) | `staging.api.<domain>` (TBD) | dedicated Supabase project               |
+| production  | `app.<domain>` (TBD)         | `api.<domain>` (TBD)         | dedicated Supabase project               |
 
 `<domain>` is a placeholder — no domain has been registered (§108). `DOMAIN_ROOT` / `DOMAIN_WEB` / `DOMAIN_API`
 in `.env.example` hold the placeholders until a real domain is chosen.
@@ -58,7 +63,7 @@ temp copy with no caches — that's how a real bug was caught and fixed before t
 prune --docker` copies each workspace package's files but not shared root-level config that isn't itself a
 workspace member, so every package's `tsc` build failed with `error TS5083: Cannot read file
 '/app/tsconfig.base.json'` until the Dockerfile explicitly copies that file into the builder stage (it now
-does). This gives real confidence in the build's *logic*; it's still not a byte-for-byte guarantee of the
+does). This gives real confidence in the build's _logic_; it's still not a byte-for-byte guarantee of the
 containerized environment, since Alpine's package set and BuildKit's layer caching can't be fully replicated
 outside Docker. Fly.io builds the actual image on its own remote builder on `fly deploy`, so you do not need
 Docker installed locally to deploy — only to test-build it yourself ahead of time if you want to.
@@ -86,7 +91,7 @@ floor, not a substitute for the server-side RLS/Policy Engine authorization this
 ## Hosting: apps/api → Fly.io
 
 `fly.staging.toml` and `fly.production.toml` (repo root) are separate, ready-to-use configs — staging and
-production are different Fly *apps*, not the same app redeployed with different env vars, matching the
+production are different Fly _apps_, not the same app redeployed with different env vars, matching the
 "fully separate environments" rule in `DATABASE_ENVIRONMENTS.md` §1. One-time setup per environment:
 
 ```
@@ -112,8 +117,10 @@ workflow — Vercel's own Git integration (above) already redeploys it on the sa
 of PR preview deploys that a scripted `vercel` CLI step in Actions would not give you for free. See
 `DATABASE_ENVIRONMENTS.md` §2/§6 for exactly what `supabase db push` does differently from `migrate.ts`.
 
-Required repo secrets: `SUPABASE_ACCESS_TOKEN`, `SUPABASE_STAGING_PROJECT_REF`, `FLY_API_TOKEN_STAGING` — see
-"Secrets by host" below for exactly where to generate each one.
+Required repo secrets: `SUPABASE_ACCESS_TOKEN`, `SUPABASE_STAGING_PROJECT_REF`,
+`SUPABASE_PRODUCTION_PROJECT_REF`, `FLY_API_TOKEN_STAGING` — see "Secrets by host" below for exactly where to
+generate each one. Before migrations, the workflow compares both project refs and refuses the deployment when
+they are missing or equal. This is a hard guard against staging writes reaching production.
 
 ## CD — production — `.github/workflows/deploy-production.yml`
 
@@ -131,24 +138,25 @@ migration without a two-step deprecate/backfill/drop plan"); the API side rolls 
 setting is what actually makes this "a controlled pipeline" rather than an unattended one; the workflow file
 alone doesn't enforce a human checkpoint without it.
 
-Required repo secrets: `SUPABASE_ACCESS_TOKEN` (shared with staging), `SUPABASE_PRODUCTION_PROJECT_REF`,
-`SUPABASE_PRODUCTION_DB_URL` (used only for the `pg_dump` backup step — treat it with the same care as the
-password-rotation pendency in `docs/checklists/infra-checklist.md`), `FLY_API_TOKEN_PRODUCTION`.
+Required repo secrets: `SUPABASE_ACCESS_TOKEN` (shared with staging), `SUPABASE_STAGING_PROJECT_REF`,
+`SUPABASE_PRODUCTION_PROJECT_REF`, `SUPABASE_PRODUCTION_DB_URL` (used only for the `pg_dump` backup step — treat
+it with the same care as the password-rotation pendency in `docs/checklists/infra-checklist.md`),
+`FLY_API_TOKEN_PRODUCTION`. The same distinct-project guard runs before the production backup or migration.
 
 ## Secrets by host — where each one comes from
 
-Nothing below is a real value; this is a map of *which secret store* each variable belongs in, so a real deploy
+Nothing below is a real value; this is a map of _which secret store_ each variable belongs in, so a real deploy
 never depends on pasting a credential into a chat, a `.env` committed to git, or a hosting dashboard's
 plaintext build logs.
 
-| Secret | Lives in | Generated at |
-|---|---|---|
-| `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `NEXT_PUBLIC_API_BASE_URL`, `NEXT_PUBLIC_APP_URL` | Vercel → Project Settings → Environment Variables (per Production/Preview scope) | Supabase dashboard → Project Settings → API |
-| `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `CORS_ALLOWED_ORIGINS` | `fly secrets set -a <app>` (per Fly app — staging vs. production) | Supabase dashboard → Project Settings → API |
-| `SUPABASE_ACCESS_TOKEN` | GitHub repo → Settings → Secrets and variables → Actions | Supabase dashboard → Account → Access Tokens (one token can drive both staging and production links) |
-| `SUPABASE_STAGING_PROJECT_REF` / `SUPABASE_PRODUCTION_PROJECT_REF` | GitHub Actions secrets | Supabase dashboard → Project Settings → General ("Reference ID") |
-| `SUPABASE_PRODUCTION_DB_URL` | GitHub Actions secrets (production job only) | Supabase dashboard → Project Settings → Database → Connection string (URI, direct or session-mode pooler — never transaction-mode, see `DATABASE_ENVIRONMENTS.md` §2) |
-| `FLY_API_TOKEN_STAGING` / `FLY_API_TOKEN_PRODUCTION` | GitHub Actions secrets | `fly tokens create deploy -a family-app-api-staging` (and again for `-production`) — scoped to one app each, not an account-wide token |
+| Secret                                                                                                         | Lives in                                                                         | Generated at                                                                                                                                                          |
+| -------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `NEXT_PUBLIC_API_BASE_URL`, `NEXT_PUBLIC_APP_URL` | Vercel → Project Settings → Environment Variables (per Production/Preview scope) | Supabase dashboard → Project Settings → API                                                                                                                           |
+| `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `CORS_ALLOWED_ORIGINS`                       | `fly secrets set -a <app>` (per Fly app — staging vs. production)                | Supabase dashboard → Project Settings → API                                                                                                                           |
+| `SUPABASE_ACCESS_TOKEN`                                                                                        | GitHub repo → Settings → Secrets and variables → Actions                         | Supabase dashboard → Account → Access Tokens (one token can drive both staging and production links)                                                                  |
+| `SUPABASE_STAGING_PROJECT_REF` / `SUPABASE_PRODUCTION_PROJECT_REF`                                             | GitHub Actions secrets                                                           | Supabase dashboard → Project Settings → General ("Reference ID")                                                                                                      |
+| `SUPABASE_PRODUCTION_DB_URL`                                                                                   | GitHub Actions secrets (production job only)                                     | Supabase dashboard → Project Settings → Database → Connection string (URI, direct or session-mode pooler — never transaction-mode, see `DATABASE_ENVIRONMENTS.md` §2) |
+| `FLY_API_TOKEN_STAGING` / `FLY_API_TOKEN_PRODUCTION`                                                           | GitHub Actions secrets                                                           | `fly tokens create deploy -a family-app-api-staging` (and again for `-production`) — scoped to one app each, not an account-wide token                                |
 
 None of these can be generated by this assistant — each one requires an account that already exists
 (Supabase, Vercel, Fly.io, GitHub) and a human clicking through that account's own UI. See

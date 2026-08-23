@@ -7,6 +7,7 @@ import { AiService } from './ai.service';
 import { AiProposalService } from './ai-proposal.service';
 import { AuthorizedMemoryService } from './authorized-memory.service';
 import { AiInsightsService } from './ai-insights.service';
+import { SupervisedAgentService } from './supervised-agent.service';
 
 @ApiTags('ai')
 @ApiBearerAuth()
@@ -18,6 +19,7 @@ export class AiController {
     private readonly proposals: AiProposalService,
     private readonly memory: AuthorizedMemoryService,
     private readonly insights: AiInsightsService,
+    private readonly supervisedAgent: SupervisedAgentService,
   ) {}
 
   @Get('insights')
@@ -44,13 +46,24 @@ export class AiController {
     return this.service.getCapabilities();
   }
 
+  @Post('agent/run')
+  runSupervisedAgent(@CurrentActor() actor: RequestActor, @Body('objective') objective: string) {
+    return this.supervisedAgent.run(actor, objective);
+  }
+
   @Get('memory')
-  listMemory(@CurrentActor() actor: RequestActor, @Query('subjectPersonId') subjectPersonId: string) {
+  listMemory(
+    @CurrentActor() actor: RequestActor,
+    @Query('subjectPersonId') subjectPersonId: string,
+  ) {
     return this.service.listMemory(actor, subjectPersonId);
   }
 
   @Post('memory')
-  createMemory(@CurrentActor() actor: RequestActor, @Body() body: Parameters<AiService['createMemory']>[1]) {
+  createMemory(
+    @CurrentActor() actor: RequestActor,
+    @Body() body: Parameters<AiService['createMemory']>[1],
+  ) {
     return this.service.createMemory(actor, body);
   }
 
@@ -74,7 +87,10 @@ export class AiController {
   }
 
   @Get('memory-export')
-  exportMemory(@CurrentActor() actor: RequestActor, @Query('subjectPersonId') subjectPersonId: string) {
+  exportMemory(
+    @CurrentActor() actor: RequestActor,
+    @Query('subjectPersonId') subjectPersonId: string,
+  ) {
     return this.memory.export(actor, subjectPersonId);
   }
 
@@ -97,7 +113,10 @@ export class AiController {
   }
 
   @Post('proposals')
-  createProposal(@CurrentActor() actor: RequestActor, @Body() body: Parameters<AiProposalService['create']>[1]) {
+  createProposal(
+    @CurrentActor() actor: RequestActor,
+    @Body() body: Parameters<AiProposalService['create']>[1],
+  ) {
     return this.proposals.create(actor, body);
   }
 

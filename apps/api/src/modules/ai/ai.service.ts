@@ -1,6 +1,18 @@
-import { BadRequestException, HttpException, Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
+import {
+  BadRequestException,
+  HttpException,
+  Injectable,
+  NotFoundException,
+  Optional,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { AiGateway } from '@family-app/ai';
-import { loadFeatureFlags } from '@family-app/config';
+import {
+  AI_ADVANCED_CAPABILITIES,
+  loadFeatureFlags,
+  resolveAiCapabilityGate,
+} from '@family-app/config';
+import type { FeatureFlags } from '@family-app/config';
 import type {
   AuthorizedFact,
   DecisionSignal,
@@ -15,13 +27,20 @@ import type { RequestActor } from '../../common/auth.guard';
 import { AuditService } from '../../common/audit.service';
 import { PolicyService } from '../../common/policy.service';
 import { SupabaseService } from '../../common/supabase.service';
+import { AI_CAPABILITY_READINESS } from './ai-capability-readiness';
+import { AiResponseCacheService } from './ai-response-cache.service';
+import { AiVectorShadowService } from './ai-vector-shadow.service';
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const AI_PROMPT_VERSION = 'zelii-decision-v2';
 const DEFAULT_PROVIDER_TIMEOUT_MS = 12_000;
 
 const askSchema = z.object({
-  question: z.string().trim().min(2, 'Escreva uma pergunta com pelo menos 2 caracteres.').max(1000, 'A pergunta deve ter no máximo 1.000 caracteres.'),
+  question: z
+    .string()
+    .trim()
+    .min(2, 'Escreva uma pergunta com pelo menos 2 caracteres.')
+    .max(1000, 'A pergunta deve ter no máximo 1.000 caracteres.'),
 });
 
 const providerCompletionSchema = z.object({
@@ -33,7 +52,13 @@ type CompletionTrace = {
   provider: string;
   model: string | null;
   promptVersion: string;
-  outcome: 'NOT_CALLED' | 'PROVIDER_SUCCESS' | 'DETERMINISTIC_FALLBACK' | 'UNSAFE_OUTPUT' | 'PROVIDER_ERROR';
+  outcome:
+    | 'NOT_CALLED'
+    | 'CACHE_HIT'
+    | 'PROVIDER_SUCCESS'
+    | 'DETERMINISTIC_FALLBACK'
+    | 'UNSAFE_OUTPUT'
+    | 'PROVIDER_ERROR';
   providerStatus?: number;
 };
 
@@ -83,20 +108,28 @@ export type CreateAiMemoryInput = z.input<typeof createMemorySchema>;
 @Injectable()
 export class AiService {
   private readonly aiEnabled: boolean;
+  private readonly featureFlags: FeatureFlags;
 
   constructor(
     private readonly supabase: SupabaseService,
     private readonly policy: PolicyService,
     private readonly audit: AuditService,
+    @Optional() private readonly responseCache?: AiResponseCacheService,
+    @Optional() private readonly vectorShadow?: AiVectorShadowService,
   ) {
-    this.aiEnabled = loadFeatureFlags().AI_ENABLED;
+    this.featureFlags = loadFeatureFlags();
+    this.aiEnabled = this.featureFlags.AI_ENABLED;
   }
 
   private db(actor: RequestActor) {
     return this.supabase.forUser(actor.bearerToken);
   }
 
-  private gatewayFor(actor: RequestActor, trace: CompletionTrace, subjectNames = new Map<string, string>()): AiGateway {
+  private gatewayFor(
+    actor: RequestActor,
+    trace: CompletionTrace,
+    subjectNames = new Map<string, string>(),
+  ): AiGateway {
     // NOTE: AiGateway's own callback signatures only pass back a bare
     // `PolicyActor` (personId/tenantId/userId — see packages/ai/src/
     // ai-gateway.ts), not the full `RequestActor` this module needs
@@ -108,13 +141,22 @@ export class AiService {
       retrieve: async (request) => {
         const facts = await this.retrieve(actor, request);
         const name = subjectNames.get(request.subjectPersonId);
-        return name ? facts.map((fact) => ({ ...fact, summary: `${name}: ${fact.summary}` })) : facts;
+        return name
+          ? facts.map((fact) => ({ ...fact, summary: `${name}: ${fact.summary}` }))
+          : facts;
       },
-      complete: (input) => this.complete(input, trace),
+      complete: (input) => this.complete(actor, input, trace),
       timeZone: process.env.APP_TIMEZONE ?? 'America/Sao_Paulo',
       loadSignals: (input) => this.loadDecisionSignals(actor, input),
-      loadPolicyInput: (_actor, subjectPersonId) => this.policy.loadPolicyEngineInput(actor, subjectPersonId),
-      recordAudit: async ({ allowedDomains, deniedDomains, factCount, signalCount, availableActions }) => {
+      loadPolicyInput: (_actor, subjectPersonId) =>
+        this.policy.loadPolicyEngineInput(actor, subjectPersonId),
+      recordAudit: async ({
+        allowedDomains,
+        deniedDomains,
+        factCount,
+        signalCount,
+        availableActions,
+      }) => {
         // Deliberately NOT persisting the raw question text (§76 — audit
         // context "MUST be redacted... never store medical detail"). A
         // health/medication question would leak exactly the sensitive
@@ -132,7 +174,8 @@ export class AiService {
 
   async ask(actor: RequestActor, question: unknown) {
     const parsed = askSchema.safeParse({ question });
-    if (!parsed.success) throw new BadRequestException(parsed.error.issues[0]?.message ?? 'Pergunta inválida.');
+    if (!parsed.success)
+      throw new BadRequestException(parsed.error.issues[0]?.message ?? 'Pergunta inválida.');
     if (!this.aiEnabled) {
       const trace: CompletionTrace = {
         provider: process.env.AI_PROVIDER ?? 'anthropic',
@@ -169,9 +212,26 @@ export class AiService {
         subjectCount: input.subjectPersonIds.length,
         allowedDomains: answer.decision?.accessedScope.domains ?? [],
         deniedDomains: answer.deniedDomains,
-        sources: answer.decision?.sources.map((source) => ({ type: source.sourceType, id: source.sourceId, updatedAt: source.updatedAt })) ?? [],
+        sources:
+          answer.decision?.sources.map((source) => ({
+            type: source.sourceType,
+            id: source.sourceId,
+            updatedAt: source.updatedAt,
+          })) ?? [],
       });
-      return { ...answer, suggestedAction: this.suggestAction(input.question, input.subjectPersonIds, answer.facts) };
+      const result = {
+        ...answer,
+        suggestedAction: this.suggestAction(input.question, input.subjectPersonIds, answer.facts),
+      };
+      void this.vectorShadow?.evaluate({
+        actor,
+        question: input.question,
+        subjectPersonIds: input.subjectPersonIds,
+        domains: answer.decision?.accessedScope.domains ?? [],
+        lexicalSourceRefs:
+          answer.decision?.sources.map((source) => `${source.sourceType}:${source.sourceId}`) ?? [],
+      });
+      return result;
     } catch (error) {
       await this.recordRun(actor, {
         ...trace,
@@ -189,13 +249,31 @@ export class AiService {
 
   getCapabilities() {
     const providerConfigured = Boolean(process.env.AI_PROVIDER_API_KEY && process.env.AI_MODEL);
+    const advancedCapabilities = Object.fromEntries(
+      AI_ADVANCED_CAPABILITIES.map((capability) => [
+        capability,
+        resolveAiCapabilityGate(capability, this.featureFlags, AI_CAPABILITY_READINESS[capability]),
+      ]),
+    ) as Record<
+      (typeof AI_ADVANCED_CAPABILITIES)[number],
+      ReturnType<typeof resolveAiCapabilityGate>
+    >;
+    const vectorGate = advancedCapabilities.VECTOR_SEARCH;
+    const exactCacheGate = advancedCapabilities.EXACT_CACHE;
+    const semanticCacheGate = advancedCapabilities.SEMANTIC_CACHE;
+    const mcpReadGate = advancedCapabilities.MCP_READ;
+    const agentGate = advancedCapabilities.AGENT_LOOP;
     return {
       textDecisionSupport: {
         enabled: this.aiEnabled,
         mode: providerConfigured ? 'PROVIDER_WITH_DETERMINISTIC_FALLBACK' : 'DETERMINISTIC_ONLY',
       },
       authorizedMemory: { enabled: true, providerIndependent: true },
-      proactiveInsights: { enabled: true, activation: 'USER_OPT_IN', source: 'DETERMINISTIC_RULES' },
+      proactiveInsights: {
+        enabled: true,
+        activation: 'USER_OPT_IN',
+        source: 'DETERMINISTIC_RULES',
+      },
       voice: {
         enabled: true,
         mode: 'BROWSER_SPEECH_RECOGNITION',
@@ -204,10 +282,47 @@ export class AiService {
       },
       retrieval: {
         lexicalSearch: true,
-        vectorSearch: false,
-        reason: 'EMBEDDING_PROVIDER_AND_DELETION_LIFECYCLE_NOT_CONFIGURED',
+        vectorSearch: vectorGate.mode === 'ENABLED',
+        vectorSearchMode: vectorGate.mode,
+        reason:
+          vectorGate.mode === 'DISABLED'
+            ? 'FEATURE_FLAG_DISABLED'
+            : vectorGate.mode === 'BLOCKED'
+              ? vectorGate.missingRequirements.join(',')
+              : vectorGate.mode === 'SHADOW'
+                ? 'SHADOW_MODE'
+                : undefined,
       },
-      externalTools: { enabled: false, reason: 'MCP_CONNECTORS_NOT_CONFIGURED' },
+      responseCache: {
+        exact: {
+          enabled: exactCacheGate.mode === 'ENABLED',
+          mode: exactCacheGate.mode,
+          missingRequirements: exactCacheGate.missingRequirements,
+        },
+        semantic: {
+          enabled: semanticCacheGate.mode === 'ENABLED',
+          mode: semanticCacheGate.mode,
+          missingRequirements: semanticCacheGate.missingRequirements,
+        },
+      },
+      externalTools: {
+        enabled: mcpReadGate.mode === 'ENABLED',
+        mode: mcpReadGate.mode,
+        reason:
+          mcpReadGate.mode === 'DISABLED'
+            ? 'FEATURE_FLAG_DISABLED'
+            : mcpReadGate.mode === 'BLOCKED'
+              ? mcpReadGate.missingRequirements.join(',')
+              : undefined,
+      },
+      supervisedAgent: {
+        enabled: agentGate.mode === 'ENABLED',
+        mode: agentGate.mode,
+        execution: 'READ_AND_PROPOSE_ONLY',
+        requiresConfirmationForWrites: true,
+        missingRequirements: agentGate.missingRequirements,
+      },
+      advancedCapabilities,
       ocr: { enabled: false, reason: 'OCR_PROVIDER_NOT_APPROVED', fallback: 'MANUAL_REVIEW' },
       externalSchoolInbox: { enabled: false, reason: 'CONNECTOR_NOT_CONFIGURED' },
     } as const;
@@ -217,8 +332,12 @@ export class AiService {
     subjectPersonIds: string[];
     subjectNames: Map<string, string>;
   }> {
-    if (!actor.tenantId || !actor.personId) throw new BadRequestException('Conclua o cadastro inicial antes de usar a ZELII.');
-    const { data, error } = await this.db(actor).from('persons').select('id, display_name').limit(100);
+    if (!actor.tenantId || !actor.personId)
+      throw new BadRequestException('Conclua o cadastro inicial antes de usar a ZELII.');
+    const { data, error } = await this.db(actor)
+      .from('persons')
+      .select('id, display_name')
+      .limit(100);
     if (error) throw this.retrievalUnavailable('as pessoas da família', error);
 
     const visible: string[] = [];
@@ -226,7 +345,9 @@ export class AiService {
     for (const row of data ?? []) {
       const personId = row.id as string;
       const allowed = await this.policy
-        .authorizeOrThrow(actor, 'VIEW', 'PROFILE', personId, { purpose: 'resolve_ai_family_scope' })
+        .authorizeOrThrow(actor, 'VIEW', 'PROFILE', personId, {
+          purpose: 'resolve_ai_family_scope',
+        })
         .then(() => true)
         .catch(() => false);
       if (allowed) {
@@ -240,26 +361,39 @@ export class AiService {
   }
 
   private async enforceRateLimit(actor: RequestActor): Promise<void> {
-    if (!actor.tenantId) throw new BadRequestException('Conclua o cadastro inicial antes de usar a ZELII.');
+    if (!actor.tenantId)
+      throw new BadRequestException('Conclua o cadastro inicial antes de usar a ZELII.');
     const configured = Number(process.env.AI_RATE_LIMIT_PER_MINUTE ?? 20);
-    const limit = Number.isFinite(configured) ? Math.min(Math.max(Math.floor(configured), 1), 120) : 20;
+    const limit = Number.isFinite(configured)
+      ? Math.min(Math.max(Math.floor(configured), 1), 120)
+      : 20;
     const { data, error } = await this.db(actor).rpc('consume_ai_rate_limit', {
       p_tenant_id: actor.tenantId,
       p_limit: limit,
     });
-    if (error) throw new ServiceUnavailableException('A ZELII não conseguiu validar o limite de uso agora. Tente novamente em instantes.');
+    if (error)
+      throw new ServiceUnavailableException(
+        'A ZELII não conseguiu validar o limite de uso agora. Tente novamente em instantes.',
+      );
 
     const raw = Array.isArray(data) ? data[0] : data;
     const result = raw as { allowed?: boolean; reset_at?: string } | null;
     if (!result?.allowed) {
-      const retryAt = result?.reset_at ? new Date(result.reset_at).toLocaleTimeString('pt-BR') : 'daqui a um minuto';
-      throw new HttpException(`Muitas perguntas em sequência. Tente novamente após ${retryAt}.`, 429);
+      const retryAt = result?.reset_at
+        ? new Date(result.reset_at).toLocaleTimeString('pt-BR')
+        : 'daqui a um minuto';
+      throw new HttpException(
+        `Muitas perguntas em sequência. Tente novamente após ${retryAt}.`,
+        429,
+      );
     }
   }
 
   async listMemory(actor: RequestActor, subjectPersonId: string) {
     if (!subjectPersonId) throw new BadRequestException('Informe a pessoa da memória.');
-    await this.policy.authorizeOrThrow(actor, 'VIEW', 'AI', subjectPersonId, { purpose: 'review_ai_memory' });
+    await this.policy.authorizeOrThrow(actor, 'VIEW', 'AI', subjectPersonId, {
+      purpose: 'review_ai_memory',
+    });
 
     const { data, error } = await this.db(actor)
       .from('ai_memory_items')
@@ -272,7 +406,9 @@ export class AiService {
     if (error) throw new BadRequestException(error.message);
 
     const now = Date.now();
-    const rows = (data ?? []).filter((row) => !row.valid_until || new Date(row.valid_until as string).getTime() >= now);
+    const rows = (data ?? []).filter(
+      (row) => !row.valid_until || new Date(row.valid_until as string).getTime() >= now,
+    );
     const allowedDomains = new Map<PermissionDomain, boolean>();
     for (const domain of new Set(rows.map((row) => row.domain as PermissionDomain))) {
       const allowed = await this.policy
@@ -311,7 +447,9 @@ export class AiService {
     }
     const value = parsed.data;
     if (!(await this.isMemoryEnabled(actor))) {
-      throw new BadRequestException('A memória personalizada está desativada nas suas configurações.');
+      throw new BadRequestException(
+        'A memória personalizada está desativada nas suas configurações.',
+      );
     }
     if (value.validUntil && new Date(value.validUntil).getTime() <= Date.now()) {
       throw new BadRequestException('A validade da memória deve estar no futuro.');
@@ -400,44 +538,117 @@ export class AiService {
     let facts: RetrievedFact[];
     switch (request.domain) {
       case 'SCHEDULE':
-        facts = await this.retrieveCalendarEvents(actor, request.subjectPersonId, 'SCHEDULE', undefined, request.timeWindow);
+        facts = await this.retrieveCalendarEvents(
+          actor,
+          request.subjectPersonId,
+          'SCHEDULE',
+          undefined,
+          request.timeWindow,
+        );
         break;
       case 'SCHOOL':
-        facts = await this.retrieveCalendarEvents(actor, request.subjectPersonId, 'SCHOOL', 'SCHOOL', request.timeWindow);
-        facts.push(...await this.retrieveCaptureItems(actor, request.subjectPersonId, 'SCHOOL', request.query));
+        facts = await this.retrieveCalendarEvents(
+          actor,
+          request.subjectPersonId,
+          'SCHOOL',
+          'SCHOOL',
+          request.timeWindow,
+        );
+        facts.push(
+          ...(await this.retrieveCaptureItems(
+            actor,
+            request.subjectPersonId,
+            'SCHOOL',
+            request.query,
+          )),
+        );
         break;
       case 'ACTIVITIES':
-        facts = await this.retrieveCalendarEvents(actor, request.subjectPersonId, 'ACTIVITIES', 'SPORT', request.timeWindow);
-        facts.push(...await this.retrieveCaptureItems(actor, request.subjectPersonId, 'ACTIVITIES', request.query));
+        facts = await this.retrieveCalendarEvents(
+          actor,
+          request.subjectPersonId,
+          'ACTIVITIES',
+          'SPORT',
+          request.timeWindow,
+        );
+        facts.push(
+          ...(await this.retrieveCaptureItems(
+            actor,
+            request.subjectPersonId,
+            'ACTIVITIES',
+            request.query,
+          )),
+        );
         break;
       case 'FINANCE':
-        facts = await this.retrieveCalendarEvents(actor, request.subjectPersonId, 'FINANCE', 'FINANCE', request.timeWindow);
-        facts.push(...await this.retrieveCaptureItems(actor, request.subjectPersonId, 'FINANCE', request.query));
+        facts = await this.retrieveCalendarEvents(
+          actor,
+          request.subjectPersonId,
+          'FINANCE',
+          'FINANCE',
+          request.timeWindow,
+        );
+        facts.push(
+          ...(await this.retrieveCaptureItems(
+            actor,
+            request.subjectPersonId,
+            'FINANCE',
+            request.query,
+          )),
+        );
         break;
       case 'MEDICATION':
         facts = await this.retrieveMedications(actor, request.subjectPersonId);
         break;
       case 'HEALTH':
         facts = await this.retrieveHealthProfile(actor, request.subjectPersonId);
-        facts.push(...await this.retrieveCaptureItems(actor, request.subjectPersonId, 'HEALTH', request.query));
+        facts.push(
+          ...(await this.retrieveCaptureItems(
+            actor,
+            request.subjectPersonId,
+            'HEALTH',
+            request.query,
+          )),
+        );
         break;
       case 'EMERGENCY':
         facts = await this.retrieveEmergencyProfile(actor, request.subjectPersonId);
         break;
       case 'DOCUMENTS':
         facts = await this.retrieveDocuments(actor, request.subjectPersonId);
-        facts.push(...await this.retrieveCaptureItems(actor, request.subjectPersonId, 'DOCUMENTS', request.query));
+        facts.push(
+          ...(await this.retrieveCaptureItems(
+            actor,
+            request.subjectPersonId,
+            'DOCUMENTS',
+            request.query,
+          )),
+        );
         break;
       case 'TRANSPORTATION':
-        facts = await this.retrieveCaptureItems(actor, request.subjectPersonId, 'TRANSPORTATION', request.query);
+        facts = await this.retrieveCaptureItems(
+          actor,
+          request.subjectPersonId,
+          'TRANSPORTATION',
+          request.query,
+        );
         break;
       case 'NOTES':
-        facts = await this.retrieveCaptureItems(actor, request.subjectPersonId, 'NOTES', request.query);
+        facts = await this.retrieveCaptureItems(
+          actor,
+          request.subjectPersonId,
+          'NOTES',
+          request.query,
+        );
         break;
       default:
         facts = [];
     }
-    const memoryFacts = await this.retrieveMemoryFacts(actor, request.subjectPersonId, request.domain);
+    const memoryFacts = await this.retrieveMemoryFacts(
+      actor,
+      request.subjectPersonId,
+      request.domain,
+    );
     return [...facts, ...memoryFacts];
   }
 
@@ -490,12 +701,18 @@ export class AiService {
         startsAt: event.starts_at as string,
         endsAt: (event.ends_at as string | null | undefined) ?? null,
         responsiblePersonId: (event.responsible_person_id as string | null | undefined) ?? null,
-        transportationPersonId: (event.transportation_person_id as string | null | undefined) ?? null,
+        transportationPersonId:
+          (event.transportation_person_id as string | null | undefined) ?? null,
       }))
       .filter((event) => event.subjectPersonId && event.startsAt);
 
     const now = new Date().toISOString();
-    const conflicts = detectConflicts({ events, careWindows: [], responsibilityAssignments: [], handoffs: [] });
+    const conflicts = detectConflicts({
+      events,
+      careWindows: [],
+      responsibilityAssignments: [],
+      handoffs: [],
+    });
     const signals: DecisionSignal[] = conflicts.map((conflict) => ({
       id: `conflict:${conflict.type}:${[...conflict.involvedResourceIds].sort().join(':')}`,
       type: 'SCHEDULE_CONFLICT',
@@ -558,28 +775,30 @@ export class AiService {
       (memory) => !memory.valid_until || new Date(memory.valid_until as string).getTime() >= now,
     );
     if (activeMemories.length > 0) {
-      await this.db(actor).from('ai_memory_usage_events').insert(
-        activeMemories.map((memory) => ({
-          tenant_id: actor.tenantId,
-          memory_id: memory.id,
-          actor_person_id: actor.personId,
-          purpose: 'ai_decision_context',
-        })),
-      );
+      await this.db(actor)
+        .from('ai_memory_usage_events')
+        .insert(
+          activeMemories.map((memory) => ({
+            tenant_id: actor.tenantId,
+            memory_id: memory.id,
+            actor_person_id: actor.personId,
+            purpose: 'ai_decision_context',
+          })),
+        );
     }
     return activeMemories.map((memory) => ({
-        domain,
-        subjectPersonId,
-        summary: `Memória confirmada: ${memory.summary as string}`,
-        source: {
-          type: 'ai_memory_items',
-          id: memory.id as string,
-          occurredAt: memory.last_verified_at as string,
-          updatedAt: memory.last_verified_at as string,
-          provenance: 'USER_DECLARED',
-          verificationStatus: 'CONFIRMED',
-        },
-      }));
+      domain,
+      subjectPersonId,
+      summary: `Memória confirmada: ${memory.summary as string}`,
+      source: {
+        type: 'ai_memory_items',
+        id: memory.id as string,
+        occurredAt: memory.last_verified_at as string,
+        updatedAt: memory.last_verified_at as string,
+        provenance: 'USER_DECLARED',
+        verificationStatus: 'CONFIRMED',
+      },
+    }));
   }
 
   private async isMemoryEnabled(actor: RequestActor): Promise<boolean> {
@@ -600,7 +819,8 @@ export class AiService {
     timeWindow?: { startsAt: string; endsAt: string },
   ): Promise<RetrievedFact[]> {
     const startsAt = timeWindow?.startsAt ?? new Date().toISOString();
-    const endsAt = timeWindow?.endsAt ?? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+    const endsAt =
+      timeWindow?.endsAt ?? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
     let query = this.db(actor)
       .from('calendar_events')
       .select('id, title, starts_at, updated_at, created_at')
@@ -628,7 +848,10 @@ export class AiService {
     }));
   }
 
-  private async retrieveMedications(actor: RequestActor, subjectPersonId: string): Promise<RetrievedFact[]> {
+  private async retrieveMedications(
+    actor: RequestActor,
+    subjectPersonId: string,
+  ): Promise<RetrievedFact[]> {
     const { data, error } = await this.db(actor)
       .from('medications')
       .select('id, name, dosage_text, updated_at, created_at')
@@ -650,7 +873,10 @@ export class AiService {
     }));
   }
 
-  private async retrieveHealthProfile(actor: RequestActor, subjectPersonId: string): Promise<RetrievedFact[]> {
+  private async retrieveHealthProfile(
+    actor: RequestActor,
+    subjectPersonId: string,
+  ): Promise<RetrievedFact[]> {
     const { data, error } = await this.db(actor)
       .from('health_profiles')
       .select('id, blood_type, allergies, conditions, updated_at, created_at')
@@ -660,24 +886,32 @@ export class AiService {
     if (!data) return [];
     const parts: string[] = [];
     if (data.blood_type) parts.push(`tipo sanguíneo ${data.blood_type as string}`);
-    if ((data.allergies as string[] | null)?.length) parts.push(`alergias: ${(data.allergies as string[]).join(', ')}`);
-    if ((data.conditions as string[] | null)?.length) parts.push(`condições: ${(data.conditions as string[]).join(', ')}`);
+    if ((data.allergies as string[] | null)?.length)
+      parts.push(`alergias: ${(data.allergies as string[]).join(', ')}`);
+    if ((data.conditions as string[] | null)?.length)
+      parts.push(`condições: ${(data.conditions as string[]).join(', ')}`);
     if (parts.length === 0) return [];
-    return [{
-      domain: 'HEALTH',
-      subjectPersonId,
-      summary: parts.join('; '),
-      source: {
-        type: 'health_profiles',
-        id: data.id as string,
-        updatedAt: (data.updated_at as string | undefined) ?? (data.created_at as string | undefined),
-        provenance: 'USER_DECLARED',
-        verificationStatus: 'DECLARED',
+    return [
+      {
+        domain: 'HEALTH',
+        subjectPersonId,
+        summary: parts.join('; '),
+        source: {
+          type: 'health_profiles',
+          id: data.id as string,
+          updatedAt:
+            (data.updated_at as string | undefined) ?? (data.created_at as string | undefined),
+          provenance: 'USER_DECLARED',
+          verificationStatus: 'DECLARED',
+        },
       },
-    }];
+    ];
   }
 
-  private async retrieveEmergencyProfile(actor: RequestActor, subjectPersonId: string): Promise<RetrievedFact[]> {
+  private async retrieveEmergencyProfile(
+    actor: RequestActor,
+    subjectPersonId: string,
+  ): Promise<RetrievedFact[]> {
     const { data, error } = await this.db(actor)
       .from('emergency_profiles')
       .select('id, allergies, pediatrician_name, preferred_hospital, updated_at, created_at')
@@ -686,25 +920,33 @@ export class AiService {
     if (error) throw this.retrievalUnavailable('perfil de emergência', error);
     if (!data) return [];
     const parts: string[] = [];
-    if ((data.allergies as string[] | null)?.length) parts.push(`alergias: ${(data.allergies as string[]).join(', ')}`);
+    if ((data.allergies as string[] | null)?.length)
+      parts.push(`alergias: ${(data.allergies as string[]).join(', ')}`);
     if (data.pediatrician_name) parts.push(`pediatra: ${data.pediatrician_name as string}`);
-    if (data.preferred_hospital) parts.push(`hospital de referência: ${data.preferred_hospital as string}`);
+    if (data.preferred_hospital)
+      parts.push(`hospital de referência: ${data.preferred_hospital as string}`);
     if (parts.length === 0) return [];
-    return [{
-      domain: 'EMERGENCY',
-      subjectPersonId,
-      summary: parts.join('; '),
-      source: {
-        type: 'emergency_profiles',
-        id: data.id as string,
-        updatedAt: (data.updated_at as string | undefined) ?? (data.created_at as string | undefined),
-        provenance: 'USER_DECLARED',
-        verificationStatus: 'DECLARED',
+    return [
+      {
+        domain: 'EMERGENCY',
+        subjectPersonId,
+        summary: parts.join('; '),
+        source: {
+          type: 'emergency_profiles',
+          id: data.id as string,
+          updatedAt:
+            (data.updated_at as string | undefined) ?? (data.created_at as string | undefined),
+          provenance: 'USER_DECLARED',
+          verificationStatus: 'DECLARED',
+        },
       },
-    }];
+    ];
   }
 
-  private async retrieveDocuments(actor: RequestActor, subjectPersonId: string): Promise<RetrievedFact[]> {
+  private async retrieveDocuments(
+    actor: RequestActor,
+    subjectPersonId: string,
+  ): Promise<RetrievedFact[]> {
     const { data, error } = await this.db(actor)
       .from('documents')
       .select('id, title, created_at, updated_at')
@@ -739,12 +981,16 @@ export class AiService {
    * falls back to a plain, deterministic listing of the retrieved facts
    * rather than fabricating a natural-language answer.
    */
-  private async complete(input: {
-    question: string;
-    facts: AuthorizedFact[];
-    signals: DecisionSignal[];
-    allowedDomains: PermissionDomain[];
-  }, trace: CompletionTrace): Promise<string> {
+  private async complete(
+    actor: RequestActor,
+    input: {
+      question: string;
+      facts: AuthorizedFact[];
+      signals: DecisionSignal[];
+      allowedDomains: PermissionDomain[];
+    },
+    trace: CompletionTrace,
+  ): Promise<string> {
     const apiKey = process.env.AI_PROVIDER_API_KEY;
     const model = process.env.AI_MODEL;
     const provider = process.env.AI_PROVIDER ?? 'anthropic';
@@ -754,8 +1000,22 @@ export class AiService {
       return this.deterministicSummary(input.facts, input.signals);
     }
 
+    const cacheContext = {
+      ...input,
+      promptVersion: AI_PROMPT_VERSION,
+      modelVersion: model,
+    };
+    const exactCached = await this.responseCache?.getExact(actor, cacheContext);
+    const cached = exactCached ?? (await this.responseCache?.getSemantic(actor, cacheContext));
+    if (cached && this.isSafeCompletion(cached.answer, input.allowedDomains)) {
+      trace.outcome = 'CACHE_HIT';
+      return cached.answer;
+    }
+
     try {
-      const configuredTimeout = Number(process.env.AI_PROVIDER_TIMEOUT_MS ?? DEFAULT_PROVIDER_TIMEOUT_MS);
+      const configuredTimeout = Number(
+        process.env.AI_PROVIDER_TIMEOUT_MS ?? DEFAULT_PROVIDER_TIMEOUT_MS,
+      );
       const timeoutMs = Number.isFinite(configuredTimeout)
         ? Math.min(30_000, Math.max(1_000, configuredTimeout))
         : DEFAULT_PROVIDER_TIMEOUT_MS;
@@ -808,6 +1068,7 @@ export class AiService {
       const completion = this.parseProviderCompletion(text, input.facts);
       if (completion && this.isSafeCompletion(completion.answer, input.allowedDomains)) {
         trace.outcome = 'PROVIDER_SUCCESS';
+        await this.responseCache?.putExact(actor, cacheContext, completion);
         return completion.answer;
       }
       trace.outcome = 'UNSAFE_OUTPUT';
@@ -847,7 +1108,10 @@ export class AiService {
     if (allowedCategories) query = query.in('category', allowedCategories);
     const lexicalQuery = question?.trim().slice(0, 200);
     if (lexicalQuery && lexicalQuery.length >= 2) {
-      query = query.textSearch('search_vector', lexicalQuery, { type: 'websearch', config: 'portuguese' });
+      query = query.textSearch('search_vector', lexicalQuery, {
+        type: 'websearch',
+        config: 'portuguese',
+      });
     }
     const { data, error } = await query;
     if (error) throw this.retrievalUnavailable('itens recebidos pela família', error);
@@ -861,9 +1125,11 @@ export class AiService {
           type: 'capture_items',
           id: item.id as string,
           occurredAt: item.created_at as string,
-          updatedAt: (item.updated_at as string | undefined) ?? (item.created_at as string | undefined),
+          updatedAt:
+            (item.updated_at as string | undefined) ?? (item.created_at as string | undefined),
           provenance: 'DOCUMENT_EXTRACTED' as const,
-          verificationStatus: item.status === 'CONFIRMED' ? 'CONFIRMED' as const : 'EXTRACTED' as const,
+          verificationStatus:
+            item.status === 'CONFIRMED' ? ('CONFIRMED' as const) : ('EXTRACTED' as const),
         },
       }));
   }
@@ -890,16 +1156,21 @@ export class AiService {
     const attention = [...new Set(signals.map((signal) => signal.summary))];
     return [
       ...situation.map((summary) => `• ${summary}`),
-      ...(attention.length > 0 ? ['', 'Pontos de atenção:', ...attention.map((summary) => `• ${summary}`)] : []),
+      ...(attention.length > 0
+        ? ['', 'Pontos de atenção:', ...attention.map((summary) => `• ${summary}`)]
+        : []),
     ].join('\n');
   }
 
   private isSafeCompletion(text: string, allowedDomains: PermissionDomain[]): boolean {
     if (text.length > 4000) return false;
-    if (/(senha|token|chave de api|system prompt|instruç(?:ão|ões) do sistema)/i.test(text)) return false;
+    if (/(senha|token|chave de api|system prompt|instruç(?:ão|ões) do sistema)/i.test(text))
+      return false;
     if (
       allowedDomains.some((domain) => domain === 'HEALTH' || domain === 'MEDICATION') &&
-      /(aumente|diminua|suspenda|pare de tomar|compense (a )?dose|o diagnóstico é|você tem [a-zá-ú]+ doença)/i.test(text)
+      /(aumente|diminua|suspenda|pare de tomar|compense (a )?dose|o diagnóstico é|você tem [a-zá-ú]+ doença)/i.test(
+        text,
+      )
     ) {
       return false;
     }
@@ -917,28 +1188,35 @@ export class AiService {
       errorCode?: string;
     },
   ): Promise<void> {
-    const { error } = await this.db(actor).from('ai_runs').insert({
-      tenant_id: actor.tenantId,
-      actor_person_id: actor.personId,
-      provider: run.provider,
-      model: run.model,
-      prompt_version: run.promptVersion,
-      outcome: run.outcome,
-      provider_status: run.providerStatus ?? null,
-      latency_ms: run.latencyMs,
-      subject_count: run.subjectCount,
-      allowed_domains: run.allowedDomains,
-      denied_domains: run.deniedDomains,
-      source_refs: run.sources,
-      error_code: run.errorCode ?? null,
-    });
+    const { error } = await this.db(actor)
+      .from('ai_runs')
+      .insert({
+        tenant_id: actor.tenantId,
+        actor_person_id: actor.personId,
+        provider: run.provider,
+        model: run.model,
+        prompt_version: run.promptVersion,
+        outcome: run.outcome,
+        provider_status: run.providerStatus ?? null,
+        latency_ms: run.latencyMs,
+        subject_count: run.subjectCount,
+        allowed_domains: run.allowedDomains,
+        denied_domains: run.deniedDomains,
+        source_refs: run.sources,
+        error_code: run.errorCode ?? null,
+      });
     // Telemetry is best-effort and must never block a family workflow.
     if (error) return;
   }
 
-  private retrievalUnavailable(area: string, error: { message?: string }): ServiceUnavailableException {
+  private retrievalUnavailable(
+    area: string,
+    error: { message?: string },
+  ): ServiceUnavailableException {
     void error;
-    return new ServiceUnavailableException(`Não foi possível consultar ${area} agora. Tente novamente em alguns instantes.`);
+    return new ServiceUnavailableException(
+      `Não foi possível consultar ${area} agora. Tente novamente em alguns instantes.`,
+    );
   }
 
   // -------------------------------------------------------- action layer

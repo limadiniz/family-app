@@ -13,6 +13,7 @@
 # required-reviewers gate here too:
 #   SUPABASE_ACCESS_TOKEN        — personal/org access token (Supabase dashboard → Account → Access Tokens)
 #   SUPABASE_STAGING_PROJECT_REF — the staging project's ref (Project Settings → General)
+#   SUPABASE_PRODUCTION_PROJECT_REF — production ref, used only to prove that staging is isolated
 #   FLY_API_TOKEN_STAGING        — `fly tokens create deploy -a family-app-api-staging`
 # Full list and where each one is generated: DEPLOYMENT.md "Secrets by host".
 
@@ -26,8 +27,29 @@ concurrency:
   cancel-in-progress: false # never cancel a migration mid-flight
 
 jobs:
+  isolation-check:
+    name: Refuse a shared staging/production database
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Assert distinct Supabase projects
+        env:
+          STAGING_PROJECT_REF: ${{ secrets.SUPABASE_STAGING_PROJECT_REF }}
+          PRODUCTION_PROJECT_REF: ${{ secrets.SUPABASE_PRODUCTION_PROJECT_REF }}
+        run: |
+          if [ -z "$STAGING_PROJECT_REF" ] || [ -z "$PRODUCTION_PROJECT_REF" ]; then
+            echo "::error::Both Supabase project refs are required to verify environment isolation."
+            exit 1
+          fi
+          if [ "$STAGING_PROJECT_REF" = "$PRODUCTION_PROJECT_REF" ]; then
+            echo "::error::Staging and production resolve to the same Supabase project. Deployment refused."
+            exit 1
+          fi
+          echo "Supabase staging/production isolation verified."
+
   migrate:
     name: Apply migrations (staging Supabase project)
+    needs: isolation-check
     runs-on: ubuntu-latest
     environment: staging
     steps:

@@ -1,11 +1,21 @@
 # Infra checklist — human/account actions required (§105)
 
 None of the following can be done by an AI assistant: they require accepting legal terms, paying for a service,
-or verifying identity with a third party. Everything technical needed to *use* these accounts (config files,
+or verifying identity with a third party. Everything technical needed to _use_ these accounts (config files,
 migrations, CI workflows) is already in this repository — only the account creation and credential handoff are
 outstanding.
 
+## Bloqueio obrigatório antes da comercialização
+
+- [ ] **Criar e validar um ambiente de homologação totalmente separado de produção.** Em 22/08/2026,
+      `family-app-api-staging` e `family-app-api-production` ainda apontavam para o mesmo projeto Supabase. Antes
+      de vender, liberar acesso público amplo ou incorporar famílias reais em escala, criar um Supabase exclusivo
+      para staging, separar chaves e dados, configurar a Vercel Preview e o CORS para esse ambiente, executar
+      migrações e repetir os testes E2E sem dados de produção. Esta pendência é critério de bloqueio de go-live
+      comercial, mesmo que uma publicação técnica controlada em produção seja realizada antes disso.
+
 ## Supabase
+
 - [ ] Create three Supabase projects: `family-app-development`, `family-app-staging`, `family-app-production`.
 - [ ] For each: copy `Project URL`, `anon public key`, `service_role key` into that environment's secrets.
 - [ ] Run `supabase link --project-ref <ref>` and `supabase db push` to apply `supabase/migrations/` to each.
@@ -21,6 +31,7 @@ outstanding.
       `temporary-uploads`) when Phase 4 implementation lands — schema/policies will be provided at that point.
 
 ## Vercel
+
 - [ ] Create a Vercel project for `apps/web`, connect this repository, set the root directory to `apps/web`
       (`apps/web/vercel.json` is already in the repo and pins the pnpm/Turborepo install + build commands —
       Vercel reads it automatically once Root Directory is set).
@@ -31,6 +42,7 @@ outstanding.
       project + `api.<domain>`, Preview scope at the staging Supabase project + `staging.api.<domain>`.
 
 ## API hosting — Fly.io
+
 - [ ] Create a Fly.io account; `fly auth login` from a terminal with the CLI installed.
 - [ ] `fly apps create family-app-api-staging` and `fly apps create family-app-api-production` (names must be
       globally unique on Fly — rename in `fly.staging.toml`/`fly.production.toml` if either is taken).
@@ -43,6 +55,7 @@ outstanding.
       Actions secret (`FLY_API_TOKEN_STAGING` / `FLY_API_TOKEN_PRODUCTION`) to enable automated deploys.
 
 ## GitHub Actions — CD secrets and gating
+
 - [ ] Repo → Settings → Secrets and variables → Actions, add: `SUPABASE_ACCESS_TOKEN`,
       `SUPABASE_STAGING_PROJECT_REF`, `SUPABASE_PRODUCTION_PROJECT_REF`, `SUPABASE_PRODUCTION_DB_URL`,
       `FLY_API_TOKEN_STAGING`, `FLY_API_TOKEN_PRODUCTION` — see DEPLOYMENT.md "Secrets by host" for exactly
@@ -54,6 +67,7 @@ outstanding.
       automatically on push to `develop`/`main` respectively — no further code changes needed to activate them.
 
 ## Domain / DNS
+
 - [ ] Register a domain (§108 — no domain has been chosen or registered).
 - [ ] Point `www.<domain>` / `app.<domain>` / `api.<domain>` at Vercel / the API host per their instructions.
 - [ ] Update `DOMAIN_ROOT` / `DOMAIN_WEB` / `DOMAIN_API` in each environment's secrets once real.
@@ -62,23 +76,28 @@ outstanding.
   domain is registered; this section only matters for the final public URLs.
 
 ## AI provider
+
 - [ ] Choose a provider (Anthropic / OpenAI / Azure OpenAI) and create an account + API key.
 - [ ] Set `AI_PROVIDER` and `AI_PROVIDER_API_KEY`; flip `FF_AI_ENABLED=true` only after Phase 6 wiring lands and
       a legal/privacy review of the AI data flow has happened (see AI_ARCHITECTURE.md, PRIVACY.md).
 
 ## Transactional email
+
 - [ ] Choose a provider (Resend / SendGrid / SES) and create an account + API key/domain verification (SPF/DKIM).
 - [ ] Set `EMAIL_PROVIDER`, `EMAIL_API_KEY`, `EMAIL_FROM`.
 
 ## Expo / EAS
+
 - [ ] Create an Expo account and an EAS project; replace `REPLACE_WITH_EAS_PROJECT_ID` in
       `apps/mobile/app.json`.
 - [ ] Generate an `EXPO_TOKEN` for CI-driven builds if automating EAS Build in the pipeline.
 
 ## Apple / Google (see the dedicated store checklists)
+
 - [ ] Apple Developer Program enrollment (`docs/checklists/app-store-checklist.md`).
 - [ ] Google Play Console account (`docs/checklists/google-play-checklist.md`).
 
 ## Observability
+
 - [ ] Create a Sentry (or equivalent) project per environment; set `SENTRY_DSN`.
 - [ ] Set up uptime monitoring against `GET /health` once the API has a public URL.

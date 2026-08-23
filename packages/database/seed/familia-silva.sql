@@ -27,8 +27,8 @@ insert into public.persons (id, tenant_id, display_name, legal_name, birth_date,
   ('10000000-0000-0000-0000-000000000016', '10000000-0000-0000-0000-000000000001', 'Mariana Silva', 'Mariana Silva Souza',  '2018-05-10', 'MINOR', true),
   ('10000000-0000-0000-0000-000000000017', '10000000-0000-0000-0000-000000000001', 'Pedro Silva',   'Pedro Silva Souza',    '2021-03-02', 'MINOR', true);
 
--- ---- Auth users + app users (Ana, Carlos, Roberto, Maria, Joana, Lucas) ----
--- Mariana and Pedro deliberately have NO auth.users/public.users row — they
+-- ---- Auth users + accounts (Ana, Carlos, Roberto, Maria, Joana, Lucas) -----
+-- Mariana and Pedro deliberately have NO auth.users/accounts row — they
 -- are Persons without a login, per §13.
 insert into auth.users (id, email) values
   ('10000000-0000-0000-0000-0000000000a1', 'ana.silva@example.com'),
@@ -39,13 +39,21 @@ insert into auth.users (id, email) values
   ('10000000-0000-0000-0000-0000000000a6', 'lucas.silva@example.com')
 on conflict (id) do nothing;
 
-insert into public.users (id, tenant_id, person_id, email, status) values
-  ('10000000-0000-0000-0000-0000000000a1', '10000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000010', 'ana.silva@example.com', 'ACTIVE'),
-  ('10000000-0000-0000-0000-0000000000a2', '10000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000011', 'carlos.souza@example.com', 'ACTIVE'),
-  ('10000000-0000-0000-0000-0000000000a3', '10000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000012', 'roberto.lima@example.com', 'ACTIVE'),
-  ('10000000-0000-0000-0000-0000000000a4', '10000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000013', 'maria.silva@example.com', 'ACTIVE'),
-  ('10000000-0000-0000-0000-0000000000a5', '10000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000014', 'joana.pereira@example.com', 'ACTIVE'),
-  ('10000000-0000-0000-0000-0000000000a6', '10000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000015', 'lucas.silva@example.com', 'ACTIVE');
+insert into public.accounts (id, email, status) values
+  ('10000000-0000-0000-0000-0000000000a1', 'ana.silva@example.com', 'ACTIVE'),
+  ('10000000-0000-0000-0000-0000000000a2', 'carlos.souza@example.com', 'ACTIVE'),
+  ('10000000-0000-0000-0000-0000000000a3', 'roberto.lima@example.com', 'ACTIVE'),
+  ('10000000-0000-0000-0000-0000000000a4', 'maria.silva@example.com', 'ACTIVE'),
+  ('10000000-0000-0000-0000-0000000000a5', 'joana.pereira@example.com', 'ACTIVE'),
+  ('10000000-0000-0000-0000-0000000000a6', 'lucas.silva@example.com', 'ACTIVE');
+
+insert into public.account_memberships (account_id, tenant_id, person_id, status) values
+  ('10000000-0000-0000-0000-0000000000a1', '10000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000010', 'ACTIVE'),
+  ('10000000-0000-0000-0000-0000000000a2', '10000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000011', 'ACTIVE'),
+  ('10000000-0000-0000-0000-0000000000a3', '10000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000012', 'ACTIVE'),
+  ('10000000-0000-0000-0000-0000000000a4', '10000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000013', 'ACTIVE'),
+  ('10000000-0000-0000-0000-0000000000a5', '10000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000014', 'ACTIVE'),
+  ('10000000-0000-0000-0000-0000000000a6', '10000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000015', 'ACTIVE');
 
 -- ---- Residences -------------------------------------------------------------
 insert into public.residences (id, tenant_id, label, city, state, timezone) values
