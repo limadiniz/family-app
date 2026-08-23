@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import {
   assertNoDuplicateActiveRole,
   assertSingleFamilyOwnerInvariant,
@@ -302,6 +302,93 @@ export class FamilyService {
     if (error) throw new BadRequestException(error.message);
     if (!data) throw new NotFoundException('Local não encontrado.');
     return data;
+  }
+
+  // ------------------------------------------------------------ Google Places
+
+  private googleMapsApiKey() {
+    const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+    if (!apiKey) {
+      throw new ServiceUnavailableException('A busca de locais do Google ainda não está configurada. Você pode preencher o endereço manualmente.');
+    }
+    return apiKey;
+  }
+
+  async searchPlaces(_actor: RequestActor, input: { query: string }) {
+    const query = String(input.query ?? '').trim().slice(0, 200);
+    if (query.length < 3) return { suggestions: [] };
+
+    const response = await fetch('https://places.googleapis.com/v1/places:autocomplete', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-goog-api-key': this.googleMapsApiKey(),
+        'x-goog-fieldmask': 'suggestions.placePrediction.placeId,suggestions.placePrediction.text,suggestions.placePrediction.structuredFormat',
+      },
+      body: JSON.stringify({ input: query, languageCode: 'pt-BR', regionCode: 'BR' }),
+    });
+    const body = (await response.json().catch(() => ({}))) as {
+      suggestions?: Array<{ placePrediction?: {
+        placeId?: string;
+        text?: { text?: string };
+        structuredFormat?: { mainText?: { text?: string }; secondaryText?: { text?: string } };
+      } }>;
+      error?: { message?: string };
+    };
+    if (!response.ok) throw new BadRequestException(body.error?.message ?? 'O Google não conseguiu buscar esse local.');
+
+    return {
+      suggestions: (body.suggestions ?? []).flatMap((item) => {
+        const prediction = item.placePrediction;
+        if (!prediction?.placeId) return [];
+        return [{
+          placeId: prediction.placeId,
+          description: prediction.text?.text ?? '',
+          mainText: prediction.structuredFormat?.mainText?.text ?? prediction.text?.text ?? '',
+          secondaryText: prediction.structuredFormat?.secondaryText?.text ?? '',
+        }];
+      }),
+    };
+  }
+
+  async getPlaceDetails(_actor: RequestActor, placeId: string) {
+    if (!/^[A-Za-z0-9:_-]{5,200}$/.test(placeId)) throw new BadRequestException('Referência de local inválida.');
+    const response = await fetch(`https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}`, {
+      headers: {
+        'x-goog-api-key': this.googleMapsApiKey(),
+        'x-goog-fieldmask': 'id,displayName,formattedAddress,addressComponents,location,googleMapsUri',
+      },
+    });
+    const body = (await response.json().catch(() => ({}))) as {
+      id?: string;
+      displayName?: { text?: string };
+      formattedAddress?: string;
+      addressComponents?: Array<{ types?: string[]; longText?: string; shortText?: string }>;
+      location?: { latitude?: number; longitude?: number };
+      googleMapsUri?: string;
+      error?: { message?: string };
+    };
+    if (!response.ok) throw new BadRequestException(body.error?.message ?? 'O Google não conseguiu carregar os detalhes desse local.');
+
+    const component = (type: string) => body.addressComponents?.find((item) => item.types?.includes(type));
+    const route = component('route')?.longText;
+    const streetNumber = component('street_number')?.longText;
+    const city = component('locality')?.longText ?? component('administrative_area_level_2')?.longText;
+    const state = component('administrative_area_level_1')?.shortText ?? component('administrative_area_level_1')?.longText;
+    const postalCode = component('postal_code')?.longText;
+
+    return {
+      placeId: body.id ?? placeId,
+      label: body.displayName?.text ?? body.formattedAddress ?? 'Local selecionado',
+      formattedAddress: body.formattedAddress ?? '',
+      addressLine: [route, streetNumber].filter(Boolean).join(', '),
+      city: city ?? '',
+      state: state ?? '',
+      postalCode: postalCode ?? '',
+      latitude: body.location?.latitude ?? null,
+      longitude: body.location?.longitude ?? null,
+      mapsUri: body.googleMapsUri ?? `https://www.google.com/maps/search/?api=1&query=Google&query_place_id=${encodeURIComponent(placeId)}`,
+    };
   }
 
   async addResidenceMembership(actor: RequestActor, input: { residenceId: string; personId: string; isPrimary?: boolean }) {

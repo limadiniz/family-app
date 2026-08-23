@@ -46,6 +46,7 @@ export const NAV_AREAS: NavArea[] = [
       { href: '/app/people', label: 'Pessoas' },
       { href: '/app/family', label: 'Família' },
       { href: '/app/care-network', label: 'Rede de Cuidado' },
+      { href: '/app/cadastros/local', label: 'Locais' },
     ],
   },
   {

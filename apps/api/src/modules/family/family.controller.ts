@@ -76,6 +76,16 @@ export class FamilyController {
     return this.familyService.updateResidence(actor, id, body);
   }
 
+  @Post('places/autocomplete')
+  searchPlaces(@CurrentActor() actor: RequestActor, @Body() body: { query: string }) {
+    return this.familyService.searchPlaces(actor, body);
+  }
+
+  @Get('places/:placeId')
+  getPlaceDetails(@CurrentActor() actor: RequestActor, @Param('placeId') placeId: string) {
+    return this.familyService.getPlaceDetails(actor, placeId);
+  }
+
   @Post('residence-memberships')
   addResidenceMembership(
     @CurrentActor() actor: RequestActor,

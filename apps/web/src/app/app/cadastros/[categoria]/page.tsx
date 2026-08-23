@@ -12,7 +12,7 @@ import { CuidadorForm } from '@/components/cadastro-forms/cuidador-form';
 import { CompromissoForm } from '@/components/cadastro-forms/compromisso-form';
 import { TarefaForm } from '@/components/cadastro-forms/tarefa-form';
 import { SolicitacaoForm } from '@/components/cadastro-forms/solicitacao-form';
-import { LocalForm } from '@/components/cadastro-forms/local-form';
+import { LocalManager } from '@/components/cadastro-forms/local-manager';
 import { RotinaForm } from '@/components/cadastro-forms/rotina-form';
 
 /** Onde cada categoria manda a pessoa depois de criar com sucesso — a página que já mostra o que acabou de ser criado. */
@@ -69,7 +69,7 @@ export default function CadastroFormPage({ params }: { params: { categoria: stri
         {params.categoria === 'compromisso' && <CompromissoForm onSuccess={handleSuccess} onCancel={goToHub} />}
         {params.categoria === 'tarefa' && <TarefaForm onSuccess={handleSuccess} onCancel={goToHub} />}
         {params.categoria === 'solicitacao' && <SolicitacaoForm onSuccess={handleSuccess} onCancel={goToHub} />}
-        {params.categoria === 'local' && <LocalForm onSuccess={handleSuccess} onCancel={goToHub} />}
+        {params.categoria === 'local' && <LocalManager onCancel={goToHub} />}
         {params.categoria === 'rotina' && <RotinaForm onSuccess={handleSuccess} onCancel={goToHub} />}
       </div>
       {toastMessage && <SuccessToast message={toastMessage} onDismiss={() => setToastMessage(null)} />}
