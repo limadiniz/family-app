@@ -215,6 +215,8 @@ function buildAlternatives(context: DecisionContext): DecisionAlternative[] {
           dependencies: ['escolher uma pessoa autorizada', 'confirmar a responsabilidade'],
           uncertainty: 'A disponibilidade da pessoa precisa ser confirmada.',
           proposedActionType: 'PROPOSE_RESPONSIBILITY_ASSIGNMENT',
+          subjectPersonId: signal.subjectPersonIds[0],
+          sourceEventId: signal.sourceRefs[0]?.id,
         }, sourceKey);
       } else {
         add({
@@ -231,10 +233,12 @@ function buildAlternatives(context: DecisionContext): DecisionAlternative[] {
         title: 'Pedir ajuda a uma pessoa autorizada',
         impact: 'Mantém o compromisso e distribui apenas a responsabilidade necessária.',
         informationShared: ['SCHEDULE'],
-        dependencies: ['escolher a pessoa', 'revisar o que será compartilhado', 'aguardar confirmação'],
-        uncertainty: 'A disponibilidade atual ainda precisa ser confirmada.',
-        proposedActionType: 'PROPOSE_REQUEST',
-      }, sourceKey);
+          dependencies: ['escolher a pessoa', 'revisar o que será compartilhado', 'aguardar confirmação'],
+          uncertainty: 'A disponibilidade atual ainda precisa ser confirmada.',
+          proposedActionType: 'PROPOSE_REQUEST',
+          subjectPersonId: signal.subjectPersonIds[0],
+          sourceEventId: signal.sourceRefs[0]?.id,
+        }, sourceKey);
     } else if (signal.type === 'PREPARATION_INCOMPLETE' || signal.type === 'APPOINTMENT_UPCOMING') {
       add({
         id: `${signal.id}:checklist`,

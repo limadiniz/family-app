@@ -24,6 +24,7 @@ export const serverEnvSchema = z.object({
 
   AI_PROVIDER_API_KEY: z.string().optional(),
   AI_MODEL: z.string().optional(),
+  GOOGLE_MAPS_API_KEY: z.string().optional(),
 
   SENTRY_DSN: z.string().optional(),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),

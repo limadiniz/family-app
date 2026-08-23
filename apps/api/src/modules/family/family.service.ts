@@ -231,14 +231,76 @@ export class FamilyService {
 
   // ------------------------------------------------------------ residences
 
-  async createResidence(actor: RequestActor, input: { label: string; city?: string; state?: string; postalCode?: string }) {
+  async listResidences(actor: RequestActor) {
+    const { data, error } = await this.db(actor)
+      .from('residences')
+      .select('*')
+      .is('deleted_at', null)
+      .order('label');
+    if (error) throw new BadRequestException(error.message);
+    return data ?? [];
+  }
+
+  async createResidence(
+    actor: RequestActor,
+    input: {
+      label: string;
+      placeType?: string;
+      addressLine?: string;
+      city?: string;
+      state?: string;
+      postalCode?: string;
+      googlePlaceId?: string;
+      latitude?: number;
+      longitude?: number;
+    },
+  ) {
     if (!actor.tenantId) throw new BadRequestException('Conclua o cadastro inicial primeiro.');
     const { data, error } = await this.db(actor)
       .from('residences')
-      .insert({ tenant_id: actor.tenantId, label: input.label, city: input.city, state: input.state, postal_code: input.postalCode })
+      .insert({
+        tenant_id: actor.tenantId,
+        label: input.label,
+        place_type: input.placeType ?? 'OTHER',
+        address_line: input.addressLine ?? null,
+        city: input.city ?? null,
+        state: input.state ?? null,
+        postal_code: input.postalCode ?? null,
+        google_place_id: input.googlePlaceId ?? null,
+        latitude: input.latitude ?? null,
+        longitude: input.longitude ?? null,
+      })
       .select()
       .single();
     if (error) throw new BadRequestException(error.message);
+    return data;
+  }
+
+  async updateResidence(
+    actor: RequestActor,
+    residenceId: string,
+    input: Partial<{
+      label: string;
+      placeType: string;
+      addressLine: string;
+      city: string;
+      state: string;
+      postalCode: string;
+      googlePlaceId: string;
+      latitude: number;
+      longitude: number;
+    }>,
+  ) {
+    const patch: Record<string, unknown> = {};
+    const fields: Array<[keyof typeof input, string]> = [
+      ['label', 'label'], ['placeType', 'place_type'], ['addressLine', 'address_line'],
+      ['city', 'city'], ['state', 'state'], ['postalCode', 'postal_code'],
+      ['googlePlaceId', 'google_place_id'], ['latitude', 'latitude'], ['longitude', 'longitude'],
+    ];
+    for (const [source, target] of fields) if (input[source] !== undefined) patch[target] = input[source];
+    const { data, error } = await this.db(actor).from('residences').update(patch).eq('id', residenceId).is('deleted_at', null).select().maybeSingle();
+    if (error) throw new BadRequestException(error.message);
+    if (!data) throw new NotFoundException('Local não encontrado.');
     return data;
   }
 
@@ -251,5 +313,114 @@ export class FamilyService {
       .single();
     if (error) throw new BadRequestException(error.message);
     return data;
+  }
+
+  async listRoutines(actor: RequestActor, personId: string) {
+    await this.policy.authorizeOrThrow(actor, 'VIEW', 'PROFILE', personId, { purpose: 'list_family_routines' });
+    const { data, error } = await this.db(actor)
+      .from('family_routines')
+      .select('*')
+      .eq('person_id', personId)
+      .is('deleted_at', null)
+      .order('starts_at');
+    if (error) throw new BadRequestException(error.message);
+    return data ?? [];
+  }
+
+  async createRoutine(
+    actor: RequestActor,
+    personId: string,
+    input: {
+      label: string;
+      routineType?: string;
+      weekdays?: number[];
+      startsAt: string;
+      endsAt?: string;
+      arrivalBufferMinutes?: number;
+      residenceId?: string;
+      notes?: string;
+    },
+  ) {
+    await this.policy.authorizeOrThrow(actor, 'EDIT', 'PROFILE', personId, { purpose: 'create_family_routine' });
+    const weekdays = [...new Set((input.weekdays ?? [1, 2, 3, 4, 5]).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6))];
+    if (weekdays.length === 0) throw new BadRequestException('Selecione ao menos um dia da semana.');
+    const { data, error } = await this.db(actor)
+      .from('family_routines')
+      .insert({
+        tenant_id: actor.tenantId,
+        person_id: personId,
+        label: input.label,
+        routine_type: input.routineType ?? 'OTHER',
+        weekdays,
+        starts_at: input.startsAt,
+        ends_at: input.endsAt ?? null,
+        arrival_buffer_minutes: input.arrivalBufferMinutes ?? 0,
+        residence_id: input.residenceId ?? null,
+        notes: input.notes ?? null,
+      })
+      .select()
+      .single();
+    if (error) throw new BadRequestException(error.message);
+    return data;
+  }
+
+  async updateRoutine(actor: RequestActor, routineId: string, input: Partial<{
+    label: string; routineType: string; weekdays: number[]; startsAt: string; endsAt: string;
+    arrivalBufferMinutes: number; residenceId: string; notes: string; isActive: boolean;
+  }>) {
+    const { data: current, error: currentError } = await this.db(actor).from('family_routines').select('person_id').eq('id', routineId).maybeSingle();
+    if (currentError) throw new BadRequestException(currentError.message);
+    if (!current) throw new NotFoundException('Rotina não encontrada.');
+    await this.policy.authorizeOrThrow(actor, 'EDIT', 'PROFILE', current.person_id as string, { purpose: 'update_family_routine' });
+    const patch: Record<string, unknown> = {};
+    const fields: Array<[string, string]> = [
+      ['label', 'label'], ['routineType', 'routine_type'], ['startsAt', 'starts_at'], ['endsAt', 'ends_at'],
+      ['arrivalBufferMinutes', 'arrival_buffer_minutes'], ['residenceId', 'residence_id'], ['notes', 'notes'], ['isActive', 'is_active'],
+    ];
+    for (const [source, target] of fields) if (input[source as keyof typeof input] !== undefined) patch[target] = input[source as keyof typeof input];
+    if (input.weekdays) patch.weekdays = [...new Set(input.weekdays.filter((day) => Number.isInteger(day) && day >= 0 && day <= 6))];
+    const { data, error } = await this.db(actor).from('family_routines').update(patch).eq('id', routineId).is('deleted_at', null).select().maybeSingle();
+    if (error) throw new BadRequestException(error.message);
+    return data;
+  }
+
+  async estimateTravelTime(actor: RequestActor, input: { originResidenceId: string; destinationResidenceId: string; departureAt?: string }) {
+    const ids = [input.originResidenceId, input.destinationResidenceId];
+    const { data, error } = await this.db(actor).from('residences').select('*').in('id', ids).is('deleted_at', null);
+    if (error) throw new BadRequestException(error.message);
+    const origin = data?.find((item) => item.id === input.originResidenceId) as Record<string, unknown> | undefined;
+    const destination = data?.find((item) => item.id === input.destinationResidenceId) as Record<string, unknown> | undefined;
+    if (!origin || !destination) throw new NotFoundException('Os dois locais precisam estar cadastrados.');
+    const address = (place: Record<string, unknown>) => [place.address_line, place.city, place.state, place.postal_code].filter(Boolean).join(', ');
+    const originText = address(origin) || String(origin.label);
+    const destinationText = address(destination) || String(destination.label);
+    const mapsUrl = `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(originText)}&destination=${encodeURIComponent(destinationText)}${input.departureAt ? `&travelmode=driving` : ''}`;
+    const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+    if (!apiKey) return { provider: 'google_maps_link', durationSeconds: null, distanceMeters: null, mapsUrl, requiresConfiguration: true };
+
+    try {
+      const response = await fetch('https://routes.googleapis.com/directions/v2:computeRoutes', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-goog-api-key': apiKey,
+          'x-goog-fieldmask': 'routes.duration,routes.distanceMeters,routes.localizedValues',
+        },
+        body: JSON.stringify({
+          origin: { address: originText },
+          destination: { address: destinationText },
+          travelMode: 'DRIVE',
+          routingPreference: 'TRAFFIC_AWARE',
+          ...(input.departureAt ? { departureTime: new Date(input.departureAt).toISOString() } : {}),
+        }),
+      });
+      if (!response.ok) return { provider: 'google_maps_link', durationSeconds: null, distanceMeters: null, mapsUrl, requiresConfiguration: false };
+      const body = (await response.json()) as { routes?: Array<{ duration?: string; distanceMeters?: number }> };
+      const route = body.routes?.[0];
+      const durationSeconds = route?.duration ? Number.parseFloat(route.duration.replace('s', '')) : null;
+      return { provider: 'google_routes', durationSeconds: Number.isFinite(durationSeconds) ? durationSeconds : null, distanceMeters: route?.distanceMeters ?? null, mapsUrl, requiresConfiguration: false };
+    } catch {
+      return { provider: 'google_maps_link', durationSeconds: null, distanceMeters: null, mapsUrl, requiresConfiguration: false };
+    }
   }
 }

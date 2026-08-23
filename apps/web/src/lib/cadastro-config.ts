@@ -29,6 +29,8 @@ export const CADASTRO_CATEGORIES: CadastroCategory[] = [
   { slug: 'compromisso', label: 'Compromisso', description: 'Um evento com data e hora — consulta, aula, atividade.', icon: AgendaIcon },
   { slug: 'tarefa', label: 'Tarefa', description: 'Algo a fazer, com prazo e responsável opcionais.', icon: TaskIcon },
   { slug: 'solicitacao', label: 'Solicitação', description: 'Um pedido para outro responsável — nada muda até ser aceito.', icon: RequestIcon },
+  { slug: 'local', label: 'Local', description: 'Casa, escola, hospital, academia e outros pontos da rotina.', icon: FamilyIcon },
+  { slug: 'rotina', label: 'Rotina e horários', description: 'Entrada, saída e compromissos recorrentes de cada criança.', icon: AgendaIcon },
 ];
 
 export function getCadastroCategory(slug: string): CadastroCategory | undefined {

@@ -22,6 +22,10 @@ interface DecisionAlternative {
   dependencies: string[];
   uncertainty?: string;
   proposedActionType?: string;
+  subjectPersonId?: string;
+  sourceEventId?: string;
+  suggestedStartsAt?: string;
+  suggestedEndsAt?: string;
 }
 
 interface StructuredDecision {
@@ -194,6 +198,14 @@ export default function AiPage() {
   const [usageByMemory, setUsageByMemory] = useState<Record<string, Array<{ purpose: string; used_at: string }>>>({});
   const [proposals, setProposals] = useState<ProposalItem[]>([]);
   const [proposalMessage, setProposalMessage] = useState<string | null>(null);
+  const [activeAlternativeId, setActiveAlternativeId] = useState<string | null>(null);
+  const [transportSubjectId, setTransportSubjectId] = useState('');
+  const [transportAssigneeId, setTransportAssigneeId] = useState('');
+  const [transportStartsAt, setTransportStartsAt] = useState('');
+  const [transportEndsAt, setTransportEndsAt] = useState('');
+  const [transportInstructions, setTransportInstructions] = useState('');
+  const [transportError, setTransportError] = useState<string | null>(null);
+  const [lastPreparedAlternativeId, setLastPreparedAlternativeId] = useState<string | null>(null);
   const [voiceSupported, setVoiceSupported] = useState<boolean | null>(null);
   const [voiceListening, setVoiceListening] = useState(false);
   const [voiceMessage, setVoiceMessage] = useState<string | null>(null);
@@ -429,6 +441,21 @@ export default function AiPage() {
 
   async function handlePrepareAction(alternative: DecisionAlternative, answer: AiAnswer) {
     if (!alternative.proposedActionType || !selectedPersonId) return;
+    if (alternative.proposedActionType === 'PROPOSE_RESPONSIBILITY_ASSIGNMENT' || alternative.proposedActionType === 'PROPOSE_REQUEST') {
+      setActiveAlternativeId((current) => current === alternative.id ? null : alternative.id);
+      setTransportSubjectId(alternative.subjectPersonId ?? selectedPersonIds[0] ?? selectedPersonId);
+      setTransportAssigneeId('');
+      setTransportStartsAt(alternative.suggestedStartsAt?.slice(0, 16) ?? '');
+      setTransportEndsAt(alternative.suggestedEndsAt?.slice(0, 16) ?? '');
+      setTransportInstructions('');
+      setTransportError(null);
+      return;
+    }
+    await prepareSimpleAction(alternative, answer);
+  }
+
+  async function prepareSimpleAction(alternative: DecisionAlternative, answer: AiAnswer) {
+    if (!alternative.proposedActionType || !selectedPersonId) return;
     setProposalMessage(null);
     const isTask = ['PROPOSE_TASK', 'PROPOSE_REMINDER', 'PROPOSE_PREPARATION_CHECKLIST'].includes(
       alternative.proposedActionType,
@@ -453,8 +480,65 @@ export default function AiPage() {
       });
       setProposalMessage('Proposta preparada. Nada foi enviado ou executado.');
       await reloadProposals();
+      setLastPreparedAlternativeId(alternative.id);
     } catch (err) {
       setProposalMessage(err instanceof Error ? err.message : 'Não foi possível preparar a proposta.');
+    }
+  }
+
+  async function handlePrepareTransport(alternative: DecisionAlternative, answer: AiAnswer) {
+    if (!alternative.proposedActionType || !transportSubjectId || !transportAssigneeId || !transportStartsAt || !transportEndsAt) {
+      setTransportError('Escolha quem levará/buscará e informe o início e o fim da responsabilidade.');
+      return;
+    }
+    if (transportAssigneeId === transportSubjectId) {
+      setTransportError('A pessoa responsável precisa ser diferente da criança ou pessoa atendida.');
+      return;
+    }
+    const startsAt = new Date(transportStartsAt).toISOString();
+    const endsAt = new Date(transportEndsAt).toISOString();
+    if (new Date(endsAt).getTime() <= new Date(startsAt).getTime()) {
+      setTransportError('O fim da responsabilidade deve ser depois do início.');
+      return;
+    }
+    setTransportError(null);
+    setProposalMessage(null);
+    try {
+      const proposedData = alternative.proposedActionType === 'PROPOSE_RESPONSIBILITY_ASSIGNMENT'
+        ? {
+            subjectPersonId: transportSubjectId,
+            responsibilityType: 'PICKUP',
+            assignedToPersonId: transportAssigneeId,
+            startsAt,
+            endsAt,
+            instructions: transportInstructions.trim() || undefined,
+          }
+        : {
+            type: 'PICKUP_REQUEST',
+            requestedToPersonId: transportAssigneeId,
+            subjectPersonId: transportSubjectId,
+            payload: { startsAt, endsAt, sourceEventId: alternative.sourceEventId },
+            note: transportInstructions.trim() || alternative.impact,
+          };
+      await apiFetch('/ai/proposals', {
+        method: 'POST',
+        body: JSON.stringify({
+          type: alternative.proposedActionType,
+          subjectPersonIds: [transportSubjectId],
+          proposedData,
+          factIds: answer.decision?.sources.map((source) => source.factId) ?? [],
+          uncertainFields: [],
+          expectedEffects: [alternative.impact],
+          informationToShare: alternative.informationShared,
+          idempotencyKey: `${alternative.id}:${transportSubjectId}:${transportAssigneeId}:${startsAt}`.slice(0, 120),
+        }),
+      });
+      setProposalMessage('Proposta preparada. Revise abaixo; nenhum pedido foi enviado ainda.');
+      setLastPreparedAlternativeId(alternative.id);
+      setActiveAlternativeId(null);
+      await reloadProposals();
+    } catch (err) {
+      setTransportError(err instanceof Error ? err.message : 'Não foi possível preparar a proposta.');
     }
   }
 
@@ -671,9 +755,77 @@ export default function AiPage() {
                               <p className="mt-1 text-sm text-inkMuted">{alternative.impact}</p>
                               {alternative.uncertainty && <p className="mt-1 text-xs text-warning">Incerteza: {alternative.uncertainty}</p>}
                               {alternative.proposedActionType && (
-                                <Button type="button" size="sm" variant="secondary" className="mt-3" onClick={() => handlePrepareAction(alternative, turn.answer!)}>
-                                  Preparar — não enviar
-                                </Button>
+                                <>
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="secondary"
+                                    className="mt-3"
+                                    onClick={() => handlePrepareAction(alternative, turn.answer!)}
+                                  >
+                                    {activeAlternativeId === alternative.id ? 'Fechar preparação' : 'Preparar — não enviar'}
+                                  </Button>
+                                  {lastPreparedAlternativeId === alternative.id && proposalMessage && (
+                                    <p className="mt-2 text-xs text-success" role="status">{proposalMessage}</p>
+                                  )}
+                                  {activeAlternativeId === alternative.id && (
+                                    <div className="mt-4 rounded-lg border border-primary/20 bg-primary/5 p-3">
+                                      <p className="text-sm font-semibold text-ink">Complete a responsabilidade</p>
+                                      <p className="mt-1 text-xs leading-relaxed text-inkMuted">
+                                        Escolha quem levará ou buscará, informe a janela de cuidado e revise antes de confirmar. A ZELII não envia nada nesta etapa.
+                                      </p>
+                                      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                                        <Select
+                                          label="Para quem é?"
+                                          value={transportSubjectId}
+                                          onChange={(event) => setTransportSubjectId(event.target.value)}
+                                        >
+                                          {(people ?? []).map((person) => (
+                                            <option key={person.id} value={person.id}>{person.display_name}</option>
+                                          ))}
+                                        </Select>
+                                        <Select
+                                          label="Quem levará/buscará?"
+                                          value={transportAssigneeId}
+                                          onChange={(event) => setTransportAssigneeId(event.target.value)}
+                                        >
+                                          <option value="">Selecione uma pessoa autorizada</option>
+                                          {(people ?? []).filter((person) => person.id !== transportSubjectId).map((person) => (
+                                            <option key={person.id} value={person.id}>{person.display_name}</option>
+                                          ))}
+                                        </Select>
+                                        <Input
+                                          label="Início"
+                                          type="datetime-local"
+                                          value={transportStartsAt}
+                                          onChange={(event) => setTransportStartsAt(event.target.value)}
+                                        />
+                                        <Input
+                                          label="Fim"
+                                          type="datetime-local"
+                                          value={transportEndsAt}
+                                          onChange={(event) => setTransportEndsAt(event.target.value)}
+                                        />
+                                      </div>
+                                      <Input
+                                        label="Instruções (opcional)"
+                                        value={transportInstructions}
+                                        onChange={(event) => setTransportInstructions(event.target.value)}
+                                        placeholder="Ex.: buscar na portaria da escola"
+                                        className="mt-3"
+                                      />
+                                      {transportError && <p className="mt-2 text-xs text-critical" role="alert">{transportError}</p>}
+                                      <Button
+                                        type="button"
+                                        size="sm"
+                                        className="mt-3"
+                                        onClick={() => handlePrepareTransport(alternative, turn.answer!)}
+                                      >
+                                        Preparar para revisão
+                                      </Button>
+                                    </div>
+                                  )}
+                                </>
                               )}
                             </div>
                           ))}

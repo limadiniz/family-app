@@ -133,6 +133,11 @@ export interface DecisionAlternative {
   dependencies: string[];
   uncertainty?: string;
   proposedActionType?: ProposedActionType;
+  /** Contexto suficiente para abrir um formulário revisável no cliente. */
+  subjectPersonId?: string;
+  sourceEventId?: string;
+  suggestedStartsAt?: string;
+  suggestedEndsAt?: string;
 }
 
 export interface StructuredDecision {

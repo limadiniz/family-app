@@ -61,9 +61,19 @@ export class FamilyController {
     return this.familyService.createRelationship(actor, body);
   }
 
+  @Get('residences')
+  listResidences(@CurrentActor() actor: RequestActor) {
+    return this.familyService.listResidences(actor);
+  }
+
   @Post('residences')
-  createResidence(@CurrentActor() actor: RequestActor, @Body() body: { label: string; city?: string; state?: string; postalCode?: string }) {
+  createResidence(@CurrentActor() actor: RequestActor, @Body() body: Parameters<FamilyService['createResidence']>[1]) {
     return this.familyService.createResidence(actor, body);
+  }
+
+  @Patch('residences/:id')
+  updateResidence(@CurrentActor() actor: RequestActor, @Param('id') id: string, @Body() body: Parameters<FamilyService['updateResidence']>[2]) {
+    return this.familyService.updateResidence(actor, id, body);
   }
 
   @Post('residence-memberships')
@@ -72,5 +82,25 @@ export class FamilyController {
     @Body() body: { residenceId: string; personId: string; isPrimary?: boolean },
   ) {
     return this.familyService.addResidenceMembership(actor, body);
+  }
+
+  @Get('persons/:id/routines')
+  listRoutines(@CurrentActor() actor: RequestActor, @Param('id') personId: string) {
+    return this.familyService.listRoutines(actor, personId);
+  }
+
+  @Post('persons/:id/routines')
+  createRoutine(@CurrentActor() actor: RequestActor, @Param('id') personId: string, @Body() body: Parameters<FamilyService['createRoutine']>[2]) {
+    return this.familyService.createRoutine(actor, personId, body);
+  }
+
+  @Patch('routines/:id')
+  updateRoutine(@CurrentActor() actor: RequestActor, @Param('id') id: string, @Body() body: Parameters<FamilyService['updateRoutine']>[2]) {
+    return this.familyService.updateRoutine(actor, id, body);
+  }
+
+  @Post('travel-time')
+  travelTime(@CurrentActor() actor: RequestActor, @Body() body: Parameters<FamilyService['estimateTravelTime']>[1]) {
+    return this.familyService.estimateTravelTime(actor, body);
   }
 }
