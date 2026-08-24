@@ -208,6 +208,7 @@ export default function AiPage() {
   const [lastPreparedAlternativeId, setLastPreparedAlternativeId] = useState<string | null>(null);
   const [voiceSupported, setVoiceSupported] = useState<boolean | null>(null);
   const [voiceListening, setVoiceListening] = useState(false);
+  const [voiceConfirmingProposalId, setVoiceConfirmingProposalId] = useState<string | null>(null);
   const [voiceMessage, setVoiceMessage] = useState<string | null>(null);
   const recognitionRef = useRef<BrowserSpeechRecognition | null>(null);
   const selectedPersonId = memoryPersonId ?? selectedPersonIds[0] ?? null;
@@ -542,17 +543,66 @@ export default function AiPage() {
     }
   }
 
-  async function handleProposalTransition(proposal: ProposalItem, action: 'confirm' | 'reject' | 'execute') {
+  async function handleProposalTransition(
+    proposal: ProposalItem,
+    action: 'confirm' | 'reject' | 'execute',
+    confirmationMethod: 'TEXT' | 'VOICE' = 'TEXT',
+  ) {
     const confirmed = action !== 'reject';
-    if (confirmed && !window.confirm(action === 'execute' ? 'Executar a ação confirmada agora?' : 'Confirmar esta proposta para revisão final?')) return;
+    if (confirmed && confirmationMethod === 'TEXT' && !window.confirm(action === 'execute' ? 'Executar a ação confirmada agora?' : 'Confirmar esta proposta para revisão final?')) return;
     try {
       await apiFetch(`/ai/proposals/${proposal.id}/${action}`, {
         method: 'POST',
-        body: JSON.stringify({ expectedVersion: proposal.version, confirmed }),
+        body: JSON.stringify({ expectedVersion: proposal.version, confirmed, confirmationMethod }),
       });
+      setProposalMessage(confirmationMethod === 'VOICE' ? 'Proposta confirmada por voz e registrada para revisão final.' : 'Proposta atualizada.');
       await reloadProposals();
     } catch (err) {
       setProposalMessage(err instanceof Error ? err.message : 'Não foi possível atualizar a proposta.');
+    }
+  }
+
+  function handleVoiceConfirmation(proposal: ProposalItem) {
+    const Recognition = speechRecognitionConstructor();
+    if (!Recognition) {
+      setVoiceMessage('A confirmação por voz não está disponível neste navegador. Use o botão Confirmar.');
+      return;
+    }
+    if (voiceListening || voiceConfirmingProposalId) return;
+
+    const recognition = new Recognition();
+    recognition.lang = 'pt-BR';
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.onresult = (event) => {
+      const phrase = Array.from(event.results)
+        .filter((result) => result.isFinal)
+        .map((result) => result[0]?.transcript ?? '')
+        .join(' ')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .trim()
+        .toLowerCase();
+      if (phrase.includes('confirmar proposta')) {
+        void handleProposalTransition(proposal, 'confirm', 'VOICE');
+      } else {
+        setVoiceMessage('Confirmação não realizada. Para sua segurança, diga exatamente “confirmar proposta”.');
+      }
+    };
+    recognition.onerror = () => setVoiceMessage('Não consegui registrar a confirmação por voz. Revise a proposta e tente novamente.');
+    recognition.onend = () => {
+      setVoiceConfirmingProposalId(null);
+      recognitionRef.current = null;
+    };
+    recognitionRef.current = recognition;
+    setVoiceConfirmingProposalId(proposal.id);
+    setVoiceMessage('Diga exatamente: “confirmar proposta”.');
+    try {
+      recognition.start();
+    } catch {
+      setVoiceConfirmingProposalId(null);
+      recognitionRef.current = null;
+      setVoiceMessage('Não foi possível iniciar o microfone. Use o botão Confirmar.');
     }
   }
 
@@ -900,6 +950,15 @@ export default function AiPage() {
                       <>
                         <Button type="button" size="sm" variant="secondary" onClick={() => handleProposalTransition(proposal, 'reject')}>Rejeitar</Button>
                         <Button type="button" size="sm" onClick={() => handleProposalTransition(proposal, 'confirm')}>Confirmar</Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          disabled={voiceSupported !== true || Boolean(voiceConfirmingProposalId)}
+                          onClick={() => handleVoiceConfirmation(proposal)}
+                        >
+                          {voiceConfirmingProposalId === proposal.id ? 'Ouvindo…' : 'Confirmar por voz'}
+                        </Button>
                       </>
                     )}
                     {proposal.status === 'CONFIRMED' && proposal.uncertain_fields.length === 0 && (

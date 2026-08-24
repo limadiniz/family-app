@@ -26,6 +26,8 @@ const createProposalSchema = z.object({
 
 type CreateProposalInput = z.input<typeof createProposalSchema>;
 type RequiredAuthorization = { domain: PermissionDomain; action: PermissionAction };
+const confirmationMethodSchema = z.enum(['TEXT', 'VOICE']);
+type ConfirmationMethod = z.infer<typeof confirmationMethodSchema>;
 @Injectable()
 export class AiProposalService {
   constructor(
@@ -124,8 +126,17 @@ export class AiProposalService {
     return data ?? [];
   }
 
-  async confirm(actor: RequestActor, id: string, expectedVersion: number, confirmed: boolean) {
+  async confirm(
+    actor: RequestActor,
+    id: string,
+    expectedVersion: number,
+    confirmed: boolean,
+    confirmationMethod: ConfirmationMethod = 'TEXT',
+  ) {
     if (!confirmed) throw new BadRequestException('A confirmação explícita é obrigatória.');
+    if (!confirmationMethodSchema.safeParse(confirmationMethod).success) {
+      throw new BadRequestException('Método de confirmação inválido.');
+    }
     const proposal = await this.load(actor, id);
     this.assertReviewable(proposal, expectedVersion);
     await this.revalidate(actor, proposal, true);
@@ -137,6 +148,7 @@ export class AiProposalService {
         version: expectedVersion + 1,
         confirmed_by_person_id: actor.personId,
         confirmed_at: new Date().toISOString(),
+        confirmation_method: confirmationMethod,
       })
       .eq('id', id)
       .eq('status', 'READY_FOR_REVIEW')
@@ -151,7 +163,7 @@ export class AiProposalService {
       resourceType: 'ai_action_proposals',
       resourceId: id,
       result: 'SUCCESS',
-      context: { action: 'PROPOSAL_CONFIRMED', type: proposal.proposal_type },
+      context: { action: 'PROPOSAL_CONFIRMED', type: proposal.proposal_type, confirmationMethod },
     });
     return data;
   }

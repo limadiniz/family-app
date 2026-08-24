@@ -124,9 +124,9 @@ export class AiController {
   confirmProposal(
     @CurrentActor() actor: RequestActor,
     @Param('id') id: string,
-    @Body() body: { expectedVersion: number; confirmed: boolean },
+    @Body() body: { expectedVersion: number; confirmed: boolean; confirmationMethod?: 'TEXT' | 'VOICE' },
   ) {
-    return this.proposals.confirm(actor, id, body.expectedVersion, body.confirmed);
+    return this.proposals.confirm(actor, id, body.expectedVersion, body.confirmed, body.confirmationMethod);
   }
 
   @Post('proposals/:id/reject')
